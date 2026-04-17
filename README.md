@@ -6,7 +6,7 @@ Corres estos comandos (DENTRO DE LA CARPETA ´PANDER_PY´):
 4. python manage.py runserver
 
 ## COMO CREAR UNA NUEVA APP
-dentro de la carpeta config ejecutas el comando: python manage.py startapp users apps/nombre_app
+ejecutas el siguientes comando: ´python manage.py startapp apps.nombre_app apps/nombre_app´
 
 ## COMO USAR REST FRAMEWORK EN DJANGO
 1. Ingresa a la carpeta config y entras al archivo ´settings´
