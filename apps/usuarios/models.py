@@ -8,7 +8,7 @@ class Rol(models.Model):
         return f"Rol: {self.nombre_rol}"
 
     class Meta:
-        db_table = "rol"
+        db_table = "roles"
 
 class Usuario(models.Model):
     nombre = models.CharField(max_length=100)
@@ -18,7 +18,6 @@ class Usuario(models.Model):
     rol = models.ForeignKey(
         Rol,
         on_delete=models.PROTECT,
-        related_name='roles',
         related_query_name='rol'
     )
 
@@ -26,7 +25,7 @@ class Usuario(models.Model):
         return f"Usuario: {self.nombre} {self.apellido}, {self.email}"
 
     class Meta:
-        db_table = "usuario"   
+        db_table = "usuarios"   
 
 class Modulo(models.Model):
     vista = models.CharField(max_length=80)
@@ -43,4 +42,4 @@ class Modulo(models.Model):
     )
 
     class Meta:
-        db_table = "modulo"
+        db_table = "modulos"
