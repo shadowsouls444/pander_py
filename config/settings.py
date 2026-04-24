@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'apps.usuarios',
     'apps.companies',
     'apps.vacantes',
+    'apps.candidatos',
     'rest_framework'
 ]
 

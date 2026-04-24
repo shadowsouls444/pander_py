@@ -5,7 +5,7 @@ class EstadoVacante(models.TextChoices):
     INACTIVO = 'I', 'Inactivo'
 
 class NivelEducativo(models.TextChoices):
-    SIN_NIVEL_EDUCATIVO = 'S', 'Sin_nivel_educativo'
+    SIN_NIVEL_EDUCATIVO = 'S', 'Sin nivel educativo'
     PRIMARIA = 'P', 'Primaria'
     BACHILLERATO = 'B', 'Bachillerato'
     TECNICO = 'TE', 'Tecnico'
@@ -14,16 +14,16 @@ class NivelEducativo(models.TextChoices):
     MAESTRIA = 'M', 'Maestria'
 
 class TipoContrato(models.TextChoices):
-    PRESTACION_SERVICIOS = 'P', 'Prestacion_servicios'
-    OBRA_LABOR = 'O', 'Obra_labor'
+    PRESTACION_SERVICIOS = 'P', 'Prestacion de servicios'
+    OBRA_LABOR = 'O', 'Obra o labor'
     DEFINIDO = 'D', 'Definido'
     INDEFINIDO = 'I', 'Indefinido'
 
 class EstadoPostulacion(models.TextChoices):
     PENDIENTE = 'P', 'Pendiente'
     VISTA = 'V', 'Vista'
-    PRESELECCIONADO = 'Pre', 'Preseleccionado'
-    NO_PRESELECCIONADO = 'N', 'No_preseleccionado'
+    PRESELECCIONADO = 'PRE', 'Preseleccionado'
+    NO_PRESELECCIONADO = 'N', 'No preseleccionado'
     EN_PROCESO = 'E', 'En_proceso'
     FINALISTA = 'F', 'Finalista'
     DESCARTADO = 'D', 'Descartado'
@@ -49,8 +49,12 @@ class Postulacion(models.Model):
     estado = models.CharField(max_length=3, choices=EstadoPostulacion.choices, default=EstadoPostulacion.PENDIENTE)
     vacante = models.ForeignKey(
         Vacante,
-        on_delete=models.PROTECT,
-        related_query_name='vacante'
+        on_delete=models.PROTECT
+    )
+    
+    candidato = models.ForeignKey(
+        "candidatos.Candidato",
+        on_delete=models.PROTECT
     )
 
     def __str__(self):
@@ -64,8 +68,7 @@ class PostulacionToken(models.Model):
     llave = models.CharField(max_length=255, unique=True)
     postulacion = models.ForeignKey(
         Postulacion,
-        on_delete=models.PROTECT,
-        related_query_name='postulacion'
+        on_delete=models.PROTECT
     )
 
     class Meta:

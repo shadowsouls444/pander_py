@@ -17,8 +17,7 @@ class Usuario(models.Model):
     password = models.CharField(max_length=128)
     rol = models.ForeignKey(
         Rol,
-        on_delete=models.PROTECT,
-        related_query_name='rol'
+        on_delete=models.PROTECT
     )
 
     def __str__(self):
@@ -37,7 +36,6 @@ class Modulo(models.Model):
     ## De muchos a muchos
     roles = models.ManyToManyField(
         Rol,
-        related_name="modulos",
         db_table="rol_modulo" ## Django por defecto crea una tabla intermedia con el nombre de las dos tablas relacionadas, pero podemos personalizarlo con db_table
     )
 
