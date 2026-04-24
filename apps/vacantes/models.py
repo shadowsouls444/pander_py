@@ -37,6 +37,10 @@ class Vacante(models.Model):
     tipo_contrato = models.CharField(max_length=1, choices=TipoContrato.choices, default=TipoContrato.PRESTACION_SERVICIOS)
     fecha_publicacion = models.DateField(auto_now_add=True)
     descripcion_cargo = models.TextField()
+    compania = models.ForeignKey(
+        "companies.Compania",
+        on_delete=models.PROTECT
+    )
 
     def __str__(self):
         return f"Vacante: {self.titulo} {self.salario}, {self.tipo_contrato}, {self.estado}"
