@@ -75,7 +75,7 @@ class Candidato(models.Model):
     usuario_modificacion = models.IntegerField(null=True, blank=True)
 
     def __str__(self):
-        return f"Candidato [{self.compania_id}-{self.id_interno}]"
+        return f"Candidato [{self.compania}-{self.id_interno}]"
 
     class Meta:
         db_table        = "candidato"
@@ -138,7 +138,7 @@ class DatosCandidato(models.Model):
 
     def __str__(self):
         return (
-            f"DatosCandidato [{self.compania_id}-{self.candidato_id}]: "
+            f"DatosCandidato [{self.compania}-{self.candidato}]: "
             f"{self.primer_nombre} {self.primer_apellido}"
         )
 
@@ -191,7 +191,7 @@ class AnexoCandidato(models.Model):
 
     def __str__(self):
         return (
-            f"Anexo [{self.compania_id}-{self.candidato_id}-{self.id_interno}]: "
+            f"Anexo [{self.compania}-{self.candidato}-{self.id_interno}]: "
             f"{self.nombre_archivo}"
         )
 
@@ -282,7 +282,7 @@ class Postulacion(models.Model):
     usuario_modificacion = models.IntegerField(null=True, blank=True)
 
     def __str__(self):
-        return f"Postulacion [{self.compania_id}-{self.id_interno}]"
+        return f"Postulacion [{self.compania}-{self.id_interno}]"
 
     class Meta:
         db_table        = "postulacion"
@@ -335,8 +335,9 @@ class PostulacionToken(models.Model):
     fecha_expiracion = models.DateTimeField()
 
     def __str__(self):
-        return f"Token [{self.compania_id}-{self.postulacion_id}]: {self.token[:24]}..."
+        return f"Token [{self.compania}-{self.postulacion}]: {self.token[:24]}..."
 
     class Meta:
         db_table        = "postulacion_token"
         unique_together = [("compania", "postulacion")]
+

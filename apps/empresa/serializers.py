@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import Compania, UnidadOrg
- 
+from .models_vistas_sql import VCompania, VUnidadOrg
  
 class CompaniaSerializer(serializers.ModelSerializer):
     class Meta:
@@ -24,4 +24,14 @@ class UnidadOrgSerializer(serializers.ModelSerializer):
             "fecha_modificacion", "usuario_modificacion",
         ]
         read_only_fields = ["id", "fecha_creacion", "fecha_modificacion"]
+ 
+class VCompaniaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = VCompania
+        fields = "__all__"
+ 
+class VUnidadOrgSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = VUnidadOrg
+        fields = "__all__"
  

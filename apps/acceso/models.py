@@ -106,7 +106,7 @@ class Modulo(models.Model):
     usuario_modificacion = models.IntegerField(null=True, blank=True)
 
     def __str__(self):
-        nivel = "(raíz)" if not self.modulo_padre_id else f"hijo de [{self.modulo_padre_id}]"
+        nivel = "(raíz)" if not self.modulo_padre else f"hijo de [{self.modulo_padre}]"
         return f"Modulo [{self.pk}]: {self.nombre_aplicacion} {nivel}"
 
     class Meta:
@@ -133,7 +133,7 @@ class RolModulo(models.Model):
     usuario_modificacion = models.IntegerField(null=True, blank=True)
 
     def __str__(self):
-        return f"RolModulo: Rol[{self.rol_id}] → Modulo[{self.modulo_id}]"
+        return f"RolModulo: Rol[{self.rol}] → Modulo[{self.modulo}]"
 
     class Meta:
         db_table        = "rol_modulo"
@@ -192,7 +192,7 @@ class Analista(models.Model):
 
     def __str__(self):
         return (
-            f"Analista [{self.compania_id}-{self.id_interno}]: "
+            f"Analista [{self.compania}-{self.id_interno}]: "
             f"{self.primer_nombre} {self.primer_apellido}"
         )
 
@@ -255,7 +255,7 @@ class Usuario(models.Model):
     usuario_modificacion = models.IntegerField(null=True, blank=True)
 
     def __str__(self):
-        return f"Usuario [{self.compania_id}-{self.id_interno}]: {self.login}"
+        return f"Usuario [{self.compania}-{self.id_interno}]: {self.login}"
 
     class Meta:
         db_table        = "usuario"

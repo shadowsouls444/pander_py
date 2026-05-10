@@ -99,17 +99,28 @@ DATABASES = {
     #}
     
     ## SQL Server
+    #'default': {
+    #    'ENGINE': 'mssql',
+    #    'NAME': 'pander_db',
+    #    'HOST': 'JOHANPORTA01\SQLEXPRESS',
+    #    'PORT': '',
+    #    'OPTIONS': {
+    #        'driver': 'ODBC Driver 18 for SQL Server',
+    #        'trusted_connection': 'yes',
+    #        'extra_params': 'TrustServerCertificate=yes'
+    #    }
+    #}
+
+    ## PostgreSQL
     'default': {
-        'ENGINE': 'mssql',
+        'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'pander_db',
-        'HOST': 'JOHANPORTA01\SQLEXPRESS',
-        'PORT': '',
-        'OPTIONS': {
-            'driver': 'ODBC Driver 18 for SQL Server',
-            'trusted_connection': 'yes',
-            'extra_params': 'TrustServerCertificate=yes'
-        }
+        'USER': 'postgres',
+        'PASSWORD': 'Admin1234*',
+        'HOST': 'localhost',
+        'PORT': '5433',
     }
+    
 }
 
 # Password validation

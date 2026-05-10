@@ -1,5 +1,5 @@
 from django.urls import path
-from . import views
+from . import views, views_vistas_sql
  
 urlpatterns = [
     # Roles
@@ -11,21 +11,31 @@ urlpatterns = [
     path("modulos/<int:id>/", views.ModuloDetail.as_view(), name="modulo-detail"),
  
     # Módulos asignados a un rol
-    path("roles/<int:rol_id>/modulos/",
+    path("roles/<int:rol>/modulos/",
          views.RolModuloList.as_view(),   name="rol-modulo-list"),
-    path("roles/<int:rol_id>/modulos/<int:id>/",
+    path("roles/<int:rol>/modulos/<int:id>/",
          views.RolModuloDetail.as_view(), name="rol-modulo-detail"),
  
     # Analistas (anidados bajo compañía)
-    path("companias/<int:compania_id>/analistas/",
+    path("companias/<int:compania>/analistas/",
          views.AnalistaList.as_view(),   name="analista-list"),
-    path("companias/<int:compania_id>/analistas/<int:id>/",
+    path("companias/<int:compania>/analistas/<int:id>/",
          views.AnalistaDetail.as_view(), name="analista-detail"),
  
     # Usuarios (anidados bajo compañía)
-    path("companias/<int:compania_id>/usuarios/",
+    path("companias/<int:compania>/usuarios/",
          views.UsuarioList.as_view(),   name="usuario-list"),
-    path("companias/<int:compania_id>/usuarios/<int:id>/",
+    path("companias/<int:compania>/usuarios/<int:id>/",
          views.UsuarioDetail.as_view(), name="usuario-detail"),
+
+     #Vistas
+    path("v/roles/",                         views_vistas_sql.VRolListView.as_view(),        name="v-rol-list"),
+    path("v/roles/<int:id>/",                views_vistas_sql.VRolDetailView.as_view(),      name="v-rol-detail"),
+    path("v/modulos/",                       views_vistas_sql.VModuloListView.as_view(),     name="v-modulo-list"),
+    path("v/modulos/<int:id>/",              views_vistas_sql.VModuloDetailView.as_view(),   name="v-modulo-detail"),
+    path("v/companias/<int:compania>/analistas/",         views_vistas_sql.VAnalistaListView.as_view(),   name="v-analista-list"),
+    path("v/companias/<int:compania>/analistas/<int:id>/",views_vistas_sql.VAnalistaDetailView.as_view(), name="v-analista-detail"),
+    path("v/companias/<int:compania>/usuarios/",          views_vistas_sql.VUsuarioListView.as_view(),    name="v-usuario-list"),
+    path("v/companias/<int:compania>/usuarios/<int:id>/", views_vistas_sql.VUsuarioDetailView.as_view(),  name="v-usuario-detail"),
 ]
  

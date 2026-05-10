@@ -1,8 +1,9 @@
 from rest_framework import serializers
 from .models import (
     TipoDocumento, Candidato, DatosCandidato, AnexoCandidato,
-    EstadoPostulacion, Postulacion, PostulacionToken,
+    EstadoPostulacion, Postulacion, PostulacionToken
 )
+from .models_vistas_sql import VCandidato, VPostulacion, VAnexoCandidato
  
  
 class TipoDocumentoSerializer(serializers.ModelSerializer):
@@ -98,4 +99,18 @@ class PostulacionTokenSerializer(serializers.ModelSerializer):
             "token", "llave", "fecha_creacion", "fecha_expiracion",
         ]
         read_only_fields = ["id", "fecha_creacion", "token"]
+
+class VCandidatoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = VCandidato
+        fields = "__all__"
  
+class VPostulacionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = VPostulacion
+        fields = "__all__"
+ 
+class VAnexoCandidatoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = VAnexoCandidato
+        fields = "__all__"

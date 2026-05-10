@@ -107,19 +107,19 @@ class TipoContratoDetail(APIView):
 # ──────────────────────────────────────────────
 class VacanteList(APIView):
     """
-    GET  /api/companias/{compania_id}/vacantes/
+    GET  /api/companias/{compania}/vacantes/
          Soporta filtros opcionales por query params:
            ?estado=1
            ?ind_publicada=true
-    POST /api/companias/{compania_id}/vacantes/
+    POST /api/companias/{compania}/vacantes/
     """
  
-    def get(self, request, compania_id):
-        qs = Vacante.objects.filter(compania_id=compania_id)
+    def get(self, request, compania):
+        qs = Vacante.objects.filter(compania=compania)
  
         estado = request.query_params.get("estado")
         if estado:
-            qs = qs.filter(estado_id=estado)
+            qs = qs.filter(estado=estado)
  
         ind_publicada = request.query_params.get("ind_publicada")
         if ind_publicada is not None:
@@ -128,9 +128,9 @@ class VacanteList(APIView):
         serializer = VacanteSerializer(qs, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
  
-    def post(self, request, compania_id):
+    def post(self, request, compania):
         data = request.data.copy()
-        data["compania"] = compania_id
+        data["compania"] = compania
         serializer = VacanteSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
@@ -140,32 +140,32 @@ class VacanteList(APIView):
  
 class VacanteDetail(APIView):
     """
-    GET    /api/companias/{compania_id}/vacantes/{id}/
-    PUT    /api/companias/{compania_id}/vacantes/{id}/
-    DELETE /api/companias/{compania_id}/vacantes/{id}/
+    GET    /api/companias/{compania}/vacantes/{id}/
+    PUT    /api/companias/{compania}/vacantes/{id}/
+    DELETE /api/companias/{compania}/vacantes/{id}/
     """
  
-    def _get(self, compania_id, id):
-        return get_object_or_404(Vacante, id=id, compania_id=compania_id)
+    def _get(self, compania, id):
+        return get_object_or_404(Vacante, id=id, compania=compania)
  
-    def get(self, request, compania_id, id):
+    def get(self, request, compania, id):
         return Response(
-            VacanteSerializer(self._get(compania_id, id)).data,
+            VacanteSerializer(self._get(compania, id)).data,
             status=status.HTTP_200_OK,
         )
  
-    def put(self, request, compania_id, id):
-        vacante = self._get(compania_id, id)
+    def put(self, request, compania, id):
+        vacante = self._get(compania, id)
         data = request.data.copy()
-        data["compania"] = compania_id
+        data["compania"] = compania
         serializer = VacanteSerializer(vacante, data=data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
  
-    def delete(self, request, compania_id, id):
-        self._get(compania_id, id).delete()
+    def delete(self, request, compania, id):
+        self._get(compania, id).delete()
         return Response(
             {"message": "Vacante eliminada correctamente"},
             status=status.HTTP_200_OK,

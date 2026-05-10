@@ -106,7 +106,7 @@ class Pregunta(models.Model):
     fecha_modificacion = models.DateTimeField(auto_now=True, null=True, blank=True)
 
     def __str__(self):
-        return f"Pregunta [{self.pk}] H[{self.habilidad_id}]: {self.contenido[:80]}"
+        return f"Pregunta [{self.pk}] H[{self.habilidad}]: {self.contenido[:80]}"
 
     class Meta:
         db_table = "pregunta"
@@ -142,7 +142,7 @@ class Respuesta(models.Model):
 
     def __str__(self):
         marca = " ✓" if self.ind_correcta else ""
-        return f"Respuesta [{self.pk}] P[{self.pregunta_id}]{marca}"
+        return f"Respuesta [{self.pk}] P[{self.pregunta}]{marca}"
 
     class Meta:
         db_table = "respuesta"
@@ -174,7 +174,7 @@ class ControlUso(models.Model):
     fecha_modificacion = models.DateTimeField(auto_now=True, null=True, blank=True)
 
     def __str__(self):
-        return f"ControlUso P[{self.pregunta_id}]: {self.tiempo_uso} usos"
+        return f"ControlUso P[{self.pregunta}]: {self.tiempo_uso} usos"
 
     class Meta:
         db_table = "control_uso"
@@ -212,7 +212,7 @@ class Evaluacion(models.Model):
     usuario_modificacion = models.IntegerField(null=True, blank=True)
 
     def __str__(self):
-        return f"Evaluacion [{self.compania_id}-{self.id_interno}]: {self.descripcion}"
+        return f"Evaluacion [{self.compania}-{self.id_interno}]: {self.descripcion}"
 
     class Meta:
         db_table        = "evaluacion"
@@ -257,8 +257,8 @@ class EvaluacionHabilidad(models.Model):
 
     def __str__(self):
         return (
-            f"EvalHabilidad: Eval[{self.compania_id}-{self.evaluacion_id}]"
-            f" → H[{self.habilidad_id}] orden {self.orden}"
+            f"EvalHabilidad: Eval[{self.compania}-{self.evaluacion}]"
+            f" → H[{self.habilidad}] orden {self.orden}"
         )
 
     class Meta:
@@ -315,8 +315,8 @@ class EvaluacionVacante(models.Model):
 
     def __str__(self):
         return (
-            f"EvalVacante: V[{self.compania_id}-{self.vacante_id}]"
-            f" → Eval[{self.evaluacion_id}]"
+            f"EvalVacante: V[{self.compania}-{self.vacante}]"
+            f" → Eval[{self.evaluacion}]"
         )
 
     class Meta:
@@ -421,9 +421,9 @@ class Intento(models.Model):
 
     def __str__(self):
         return (
-            f"Intento [{self.compania_id}-{self.id_interno}]"
-            f" C[{self.candidato_id}] Eval[{self.evaluacion_id}]"
-            f" Estado[{self.estado_id}]"
+            f"Intento [{self.compania}-{self.id_interno}]"
+            f" C[{self.candidato}] Eval[{self.evaluacion}]"
+            f" Estado[{self.estado}]"
         )
 
     class Meta:
@@ -480,8 +480,8 @@ class RespuestaCandidato(models.Model):
 
     def __str__(self):
         return (
-            f"RespCandidato: I[{self.compania_id}-{self.intento_id}]"
-            f" P[{self.pregunta_id}] → R[{self.respuesta_id}]"
+            f"RespCandidato: I[{self.compania}-{self.intento}]"
+            f" P[{self.pregunta}] → R[{self.respuesta}]"
         )
 
     class Meta:
@@ -525,7 +525,7 @@ class HistorialHabilidadEstim(models.Model):
 
     def __str__(self):
         return (
-            f"Historial [{self.pk}] I[{self.intento_id}]"
+            f"Historial [{self.pk}] I[{self.intento}]"
             f" Paso {self.paso}: θ={self.habilidad_estim:.4f}"
         )
 

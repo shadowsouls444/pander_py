@@ -2,8 +2,9 @@ from rest_framework import serializers
 from .models import (
     Habilidad, Pregunta, Respuesta, ControlUso,
     Evaluacion, EvaluacionHabilidad, EvaluacionVacante,
-    EstadoIntento, Intento, RespuestaCandidato, HistorialHabilidadEstim,
+    EstadoIntento, Intento, RespuestaCandidato, HistorialHabilidadEstim
 )
+from .models_vistas_sql import VHabilidad, VPregunta, VEvaluacion, VIntento, VReportePostulacion
  
  
 class HabilidadSerializer(serializers.ModelSerializer):
@@ -136,4 +137,28 @@ class HistorialHabilidadEstimSerializer(serializers.ModelSerializer):
             "fecha_creacion", "fecha_modificacion",
         ]
         read_only_fields = ["id", "fecha_creacion", "fecha_modificacion"]
+
+class VHabilidadSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = VHabilidad
+        fields = "__all__"
  
+class VPreguntaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = VPregunta
+        fields = "__all__"
+ 
+class VEvaluacionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = VEvaluacion
+        fields = "__all__"
+ 
+class VIntentoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = VIntento
+        fields = "__all__"
+ 
+class VReportePostulacionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = VReportePostulacion
+        fields = "__all__"

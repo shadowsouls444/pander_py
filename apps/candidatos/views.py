@@ -57,22 +57,22 @@ class TipoDocumentoDetail(APIView):
 # ──────────────────────────────────────────────
 class CandidatoList(APIView):
     """
-    GET  /api/companias/{compania_id}/candidatos/
-         Soporta filtro: ?vacante_id=3  (candidatos postulados a una vacante)
-    POST /api/companias/{compania_id}/candidatos/
+    GET  /api/companias/{compania}/candidatos/
+         Soporta filtro: ?vacante=3  (candidatos postulados a una vacante)
+    POST /api/companias/{compania}/candidatos/
     """
  
-    def get(self, request, compania_id):
-        qs = Candidato.objects.filter(compania_id=compania_id)
-        vacante_id = request.query_params.get("vacante_id")
-        if vacante_id:
-            qs = qs.filter(postulaciones__vacante_id=vacante_id).distinct()
+    def get(self, request, compania):
+        qs = Candidato.objects.filter(compania=compania)
+        vacante = request.query_params.get("vacante")
+        if vacante:
+            qs = qs.filter(postulaciones__vacante=vacante).distinct()
         serializer = CandidatoSerializer(qs, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
  
-    def post(self, request, compania_id):
+    def post(self, request, compania):
         data = request.data.copy()
-        data["compania"] = compania_id
+        data["compania"] = compania
         serializer = CandidatoSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
@@ -82,32 +82,32 @@ class CandidatoList(APIView):
  
 class CandidatoDetail(APIView):
     """
-    GET    /api/companias/{compania_id}/candidatos/{id}/
-    PUT    /api/companias/{compania_id}/candidatos/{id}/
-    DELETE /api/companias/{compania_id}/candidatos/{id}/
+    GET    /api/companias/{compania}/candidatos/{id}/
+    PUT    /api/companias/{compania}/candidatos/{id}/
+    DELETE /api/companias/{compania}/candidatos/{id}/
     """
  
-    def _get(self, compania_id, id):
-        return get_object_or_404(Candidato, id=id, compania_id=compania_id)
+    def _get(self, compania, id):
+        return get_object_or_404(Candidato, id=id, compania=compania)
  
-    def get(self, request, compania_id, id):
+    def get(self, request, compania, id):
         return Response(
-            CandidatoSerializer(self._get(compania_id, id)).data,
+            CandidatoSerializer(self._get(compania, id)).data,
             status=status.HTTP_200_OK,
         )
  
-    def put(self, request, compania_id, id):
-        candidato = self._get(compania_id, id)
+    def put(self, request, compania, id):
+        candidato = self._get(compania, id)
         data = request.data.copy()
-        data["compania"] = compania_id
+        data["compania"] = compania
         serializer = CandidatoSerializer(candidato, data=data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
  
-    def delete(self, request, compania_id, id):
-        self._get(compania_id, id).delete()
+    def delete(self, request, compania, id):
+        self._get(compania, id).delete()
         return Response(
             {"message": "Candidato eliminado correctamente"},
             status=status.HTTP_200_OK,
@@ -120,37 +120,37 @@ class CandidatoDetail(APIView):
 class DatosCandidatoDetail(APIView):
     """
     Relación 1:1 con Candidato.
-    GET  /api/companias/{compania_id}/candidatos/{candidato_id}/datos/
-    PUT  /api/companias/{compania_id}/candidatos/{candidato_id}/datos/
-    POST /api/companias/{compania_id}/candidatos/{candidato_id}/datos/
+    GET  /api/companias/{compania}/candidatos/{candidato}/datos/
+    PUT  /api/companias/{compania}/candidatos/{candidato}/datos/
+    POST /api/companias/{compania}/candidatos/{candidato}/datos/
          (crea si no existe)
     """
  
-    def _get_candidato(self, compania_id, candidato_id):
-        return get_object_or_404(Candidato, id=candidato_id, compania_id=compania_id)
+    def _get_candidato(self, compania, candidato):
+        return get_object_or_404(Candidato, id=candidato, compania=compania)
  
-    def get(self, request, compania_id, candidato_id):
-        self._get_candidato(compania_id, candidato_id)
-        datos = get_object_or_404(DatosCandidato, candidato_id=candidato_id)
+    def get(self, request, compania, candidato):
+        self._get_candidato(compania, candidato)
+        datos = get_object_or_404(DatosCandidato, candidato=candidato)
         return Response(DatosCandidatoSerializer(datos).data, status=status.HTTP_200_OK)
  
-    def post(self, request, compania_id, candidato_id):
-        self._get_candidato(compania_id, candidato_id)
+    def post(self, request, compania, candidato):
+        self._get_candidato(compania, candidato)
         data = request.data.copy()
-        data["compania"]  = compania_id
-        data["candidato"] = candidato_id
+        data["compania"]  = compania
+        data["candidato"] = candidato
         serializer = DatosCandidatoSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
  
-    def put(self, request, compania_id, candidato_id):
-        self._get_candidato(compania_id, candidato_id)
-        datos = get_object_or_404(DatosCandidato, candidato_id=candidato_id)
+    def put(self, request, compania, candidato):
+        self._get_candidato(compania, candidato)
+        datos = get_object_or_404(DatosCandidato, candidato=candidato)
         data = request.data.copy()
-        data["compania"]  = compania_id
-        data["candidato"] = candidato_id
+        data["compania"]  = compania
+        data["candidato"] = candidato
         serializer = DatosCandidatoSerializer(datos, data=data)
         if serializer.is_valid():
             serializer.save()
@@ -163,28 +163,28 @@ class DatosCandidatoDetail(APIView):
 # ──────────────────────────────────────────────
 class AnexoCandidatoList(APIView):
     """
-    GET  /api/companias/{compania_id}/candidatos/{candidato_id}/anexos/
-    POST /api/companias/{compania_id}/candidatos/{candidato_id}/anexos/
+    GET  /api/companias/{compania}/candidatos/{candidato}/anexos/
+    POST /api/companias/{compania}/candidatos/{candidato}/anexos/
     """
  
-    def _get_candidato(self, compania_id, candidato_id):
-        return get_object_or_404(Candidato, id=candidato_id, compania_id=compania_id)
+    def _get_candidato(self, compania, candidato):
+        return get_object_or_404(Candidato, id=candidato, compania=compania)
  
-    def get(self, request, compania_id, candidato_id):
-        self._get_candidato(compania_id, candidato_id)
+    def get(self, request, compania, candidato):
+        self._get_candidato(compania, candidato)
         anexos = AnexoCandidato.objects.filter(
-            compania_id=compania_id, candidato_id=candidato_id
+            compania=compania, candidato=candidato
         )
         return Response(
             AnexoCandidatoSerializer(anexos, many=True).data,
             status=status.HTTP_200_OK,
         )
  
-    def post(self, request, compania_id, candidato_id):
-        self._get_candidato(compania_id, candidato_id)
+    def post(self, request, compania, candidato):
+        self._get_candidato(compania, candidato)
         data = request.data.copy()
-        data["compania"]  = compania_id
-        data["candidato"] = candidato_id
+        data["compania"]  = compania
+        data["candidato"] = candidato
         serializer = AnexoCandidatoSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
@@ -194,24 +194,24 @@ class AnexoCandidatoList(APIView):
  
 class AnexoCandidatoDetail(APIView):
     """
-    GET    /api/companias/{compania_id}/candidatos/{candidato_id}/anexos/{id}/
-    DELETE /api/companias/{compania_id}/candidatos/{candidato_id}/anexos/{id}/
+    GET    /api/companias/{compania}/candidatos/{candidato}/anexos/{id}/
+    DELETE /api/companias/{compania}/candidatos/{candidato}/anexos/{id}/
     """
  
-    def _get(self, compania_id, candidato_id, id):
+    def _get(self, compania, candidato, id):
         return get_object_or_404(
             AnexoCandidato, id=id,
-            compania_id=compania_id, candidato_id=candidato_id,
+            compania=compania, candidato=candidato,
         )
  
-    def get(self, request, compania_id, candidato_id, id):
+    def get(self, request, compania, candidato, id):
         return Response(
-            AnexoCandidatoSerializer(self._get(compania_id, candidato_id, id)).data,
+            AnexoCandidatoSerializer(self._get(compania, candidato, id)).data,
             status=status.HTTP_200_OK,
         )
  
-    def delete(self, request, compania_id, candidato_id, id):
-        self._get(compania_id, candidato_id, id).delete()
+    def delete(self, request, compania, candidato, id):
+        self._get(compania, candidato, id).delete()
         return Response(
             {"message": "Anexo eliminado correctamente"},
             status=status.HTTP_200_OK,
@@ -266,18 +266,18 @@ class EstadoPostulacionDetail(APIView):
 # ──────────────────────────────────────────────
 class PostulacionList(APIView):
     """
-    GET  /api/companias/{compania_id}/postulaciones/
-         Filtros opcionales: ?vacante_id=1  ?estado=2  ?candidato_id=5
-    POST /api/companias/{compania_id}/postulaciones/
+    GET  /api/companias/{compania}/postulaciones/
+         Filtros opcionales: ?vacante=1  ?estado=2  ?candidato=5
+    POST /api/companias/{compania}/postulaciones/
     """
  
-    def get(self, request, compania_id):
-        qs = Postulacion.objects.filter(compania_id=compania_id)
+    def get(self, request, compania):
+        qs = Postulacion.objects.filter(compania=compania)
  
         for param, field in [
-            ("vacante_id",   "vacante_id"),
-            ("estado",       "estado_id"),
-            ("candidato_id", "candidato_id"),
+            ("vacante",   "vacante"),
+            ("estado",       "estado"),
+            ("candidato", "candidato"),
         ]:
             value = request.query_params.get(param)
             if value:
@@ -288,9 +288,9 @@ class PostulacionList(APIView):
             status=status.HTTP_200_OK,
         )
  
-    def post(self, request, compania_id):
+    def post(self, request, compania):
         data = request.data.copy()
-        data["compania"] = compania_id
+        data["compania"] = compania
         serializer = PostulacionSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
@@ -300,32 +300,32 @@ class PostulacionList(APIView):
  
 class PostulacionDetail(APIView):
     """
-    GET    /api/companias/{compania_id}/postulaciones/{id}/
-    PUT    /api/companias/{compania_id}/postulaciones/{id}/
-    DELETE /api/companias/{compania_id}/postulaciones/{id}/
+    GET    /api/companias/{compania}/postulaciones/{id}/
+    PUT    /api/companias/{compania}/postulaciones/{id}/
+    DELETE /api/companias/{compania}/postulaciones/{id}/
     """
  
-    def _get(self, compania_id, id):
-        return get_object_or_404(Postulacion, id=id, compania_id=compania_id)
+    def _get(self, compania, id):
+        return get_object_or_404(Postulacion, id=id, compania=compania)
  
-    def get(self, request, compania_id, id):
+    def get(self, request, compania, id):
         return Response(
-            PostulacionSerializer(self._get(compania_id, id)).data,
+            PostulacionSerializer(self._get(compania, id)).data,
             status=status.HTTP_200_OK,
         )
  
-    def put(self, request, compania_id, id):
-        postulacion = self._get(compania_id, id)
+    def put(self, request, compania, id):
+        postulacion = self._get(compania, id)
         data = request.data.copy()
-        data["compania"] = compania_id
+        data["compania"] = compania
         serializer = PostulacionSerializer(postulacion, data=data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
  
-    def delete(self, request, compania_id, id):
-        self._get(compania_id, id).delete()
+    def delete(self, request, compania, id):
+        self._get(compania, id).delete()
         return Response(
             {"message": "Postulación eliminada correctamente"},
             status=status.HTTP_200_OK,
@@ -337,35 +337,35 @@ class PostulacionDetail(APIView):
 # ──────────────────────────────────────────────
 class PostulacionTokenList(APIView):
     """
-    GET  /api/companias/{compania_id}/postulaciones/{postulacion_id}/tokens/
-    POST /api/companias/{compania_id}/postulaciones/{postulacion_id}/tokens/
+    GET  /api/companias/{compania}/postulaciones/{postulacion}/tokens/
+    POST /api/companias/{compania}/postulaciones/{postulacion}/tokens/
          El backend genera token y llave antes de persistir.
     """
  
-    def _get_postulacion(self, compania_id, postulacion_id):
+    def _get_postulacion(self, compania, postulacion):
         return get_object_or_404(
-            Postulacion, id=postulacion_id, compania_id=compania_id
+            Postulacion, id=postulacion, compania=compania
         )
  
-    def get(self, request, compania_id, postulacion_id):
-        self._get_postulacion(compania_id, postulacion_id)
+    def get(self, request, compania, postulacion):
+        self._get_postulacion(compania, postulacion)
         tokens = PostulacionToken.objects.filter(
-            compania_id=compania_id, postulacion_id=postulacion_id
+            compania=compania, postulacion=postulacion
         )
         return Response(
             PostulacionTokenSerializer(tokens, many=True).data,
             status=status.HTTP_200_OK,
         )
  
-    def post(self, request, compania_id, postulacion_id):
+    def post(self, request, compania, postulacion):
         import uuid, hmac, hashlib, secrets
         from django.utils import timezone
         from datetime import timedelta
  
-        self._get_postulacion(compania_id, postulacion_id)
+        self._get_postulacion(compania, postulacion)
         data = request.data.copy()
-        data["compania"]    = compania_id
-        data["postulacion"] = postulacion_id
+        data["compania"]    = compania
+        data["postulacion"] = postulacion
  
         # Generación segura de token y llave
         data["token"] = str(uuid.uuid4())
@@ -382,4 +382,28 @@ class PostulacionTokenList(APIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
+
+# ════════════════════════════════════════════════════════════
+# ENDPOINT ADICIONAL — Reporte ejecutivo
+# ════════════════════════════════════════════════════════════
+class ReportePostulacionList(APIView):
+    '''
+    GET /api/companias/{compania}/reporte-postulaciones/
+        ?vacante=1   → filtro por vacante
+        ?decision=SELECCIONADO | DESCARTADO | EN_PROCESO | FINALIZADO
+    '''
+    def get(self, request, compania):
+        qs = VReportePostulacion.objects.filter(compania=compania)
+ 
+        vacante = request.query_params.get("vacante")
+        if vacante:
+            qs = qs.filter(vacante=vacante)
+ 
+        decision = request.query_params.get("decision")
+        if decision:
+            qs = qs.filter(decision=decision.upper())
+ 
+        return Response(
+            VReportePostulacionSerializer(qs, many=True).data,
+            status=status.HTTP_200_OK,
+        )

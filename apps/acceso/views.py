@@ -7,8 +7,6 @@ from .serializers import (
     RolSerializer, ModuloSerializer, RolModuloSerializer,
     AnalistaSerializer, UsuarioSerializer,
 )
- 
- 
 
 class RolList(APIView):
     """
@@ -104,20 +102,20 @@ class ModuloDetail(APIView):
 
 class RolModuloList(APIView):
     """
-    GET  /api/roles/{rol_id}/modulos/  → módulos asignados a un rol
-    POST /api/roles/{rol_id}/modulos/  → asigna un módulo a un rol
+    GET  /api/roles/{rol}/modulos/  → módulos asignados a un rol
+    POST /api/roles/{rol}/modulos/  → asigna un módulo a un rol
     """
  
-    def get(self, request, rol_id):
-        get_object_or_404(Rol, id=rol_id)
-        relaciones = RolModulo.objects.filter(rol_id=rol_id)
+    def get(self, request, rol):
+        get_object_or_404(Rol, id=rol)
+        relaciones = RolModulo.objects.filter(rol=rol)
         serializer = RolModuloSerializer(relaciones, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
  
-    def post(self, request, rol_id):
-        get_object_or_404(Rol, id=rol_id)
+    def post(self, request, rol):
+        get_object_or_404(Rol, id=rol)
         data = request.data.copy()
-        data["rol"] = rol_id
+        data["rol"] = rol
         serializer = RolModuloSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
@@ -127,11 +125,11 @@ class RolModuloList(APIView):
  
 class RolModuloDetail(APIView):
     """
-    DELETE /api/roles/{rol_id}/modulos/{id}/  → desasigna un módulo de un rol
+    DELETE /api/roles/{rol}/modulos/{id}/  → desasigna un módulo de un rol
     """
  
-    def delete(self, request, rol_id, id):
-        relacion = get_object_or_404(RolModulo, id=id, rol_id=rol_id)
+    def delete(self, request, rol, id):
+        relacion = get_object_or_404(RolModulo, id=id, rol=rol)
         relacion.delete()
         return Response(
             {"message": "Módulo desasignado del rol correctamente"},
@@ -140,18 +138,18 @@ class RolModuloDetail(APIView):
  
 class AnalistaList(APIView):
     """
-    GET  /api/companias/{compania_id}/analistas/
-    POST /api/companias/{compania_id}/analistas/
+    GET  /api/companias/{compania}/analistas/
+    POST /api/companias/{compania}/analistas/
     """
  
-    def get(self, request, compania_id):
-        analistas = Analista.objects.filter(compania_id=compania_id)
+    def get(self, request, compania):
+        analistas = Analista.objects.filter(compania=compania)
         serializer = AnalistaSerializer(analistas, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
  
-    def post(self, request, compania_id):
+    def post(self, request, compania):
         data = request.data.copy()
-        data["compania"] = compania_id
+        data["compania"] = compania
         serializer = AnalistaSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
@@ -161,32 +159,32 @@ class AnalistaList(APIView):
  
 class AnalistaDetail(APIView):
     """
-    GET    /api/companias/{compania_id}/analistas/{id}/
-    PUT    /api/companias/{compania_id}/analistas/{id}/
-    DELETE /api/companias/{compania_id}/analistas/{id}/
+    GET    /api/companias/{compania}/analistas/{id}/
+    PUT    /api/companias/{compania}/analistas/{id}/
+    DELETE /api/companias/{compania}/analistas/{id}/
     """
  
-    def _get(self, compania_id, id):
-        return get_object_or_404(Analista, id=id, compania_id=compania_id)
+    def _get(self, compania, id):
+        return get_object_or_404(Analista, id=id, compania=compania)
  
-    def get(self, request, compania_id, id):
+    def get(self, request, compania, id):
         return Response(
-            AnalistaSerializer(self._get(compania_id, id)).data,
+            AnalistaSerializer(self._get(compania, id)).data,
             status=status.HTTP_200_OK,
         )
  
-    def put(self, request, compania_id, id):
-        analista = self._get(compania_id, id)
+    def put(self, request, compania, id):
+        analista = self._get(compania, id)
         data = request.data.copy()
-        data["compania"] = compania_id
+        data["compania"] = compania
         serializer = AnalistaSerializer(analista, data=data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
  
-    def delete(self, request, compania_id, id):
-        self._get(compania_id, id).delete()
+    def delete(self, request, compania, id):
+        self._get(compania, id).delete()
         return Response(
             {"message": "Analista eliminado correctamente"},
             status=status.HTTP_200_OK,
@@ -195,18 +193,18 @@ class AnalistaDetail(APIView):
  
 class UsuarioList(APIView):
     """
-    GET  /api/companias/{compania_id}/usuarios/
-    POST /api/companias/{compania_id}/usuarios/
+    GET  /api/companias/{compania}/usuarios/
+    POST /api/companias/{compania}/usuarios/
     """
  
-    def get(self, request, compania_id):
-        usuarios = Usuario.objects.filter(compania_id=compania_id)
+    def get(self, request, compania):
+        usuarios = Usuario.objects.filter(compania=compania)
         serializer = UsuarioSerializer(usuarios, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
  
-    def post(self, request, compania_id):
+    def post(self, request, compania):
         data = request.data.copy()
-        data["compania"] = compania_id
+        data["compania"] = compania
         serializer = UsuarioSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
@@ -216,32 +214,32 @@ class UsuarioList(APIView):
  
 class UsuarioDetail(APIView):
     """
-    GET    /api/companias/{compania_id}/usuarios/{id}/
-    PUT    /api/companias/{compania_id}/usuarios/{id}/
-    DELETE /api/companias/{compania_id}/usuarios/{id}/
+    GET    /api/companias/{compania}/usuarios/{id}/
+    PUT    /api/companias/{compania}/usuarios/{id}/
+    DELETE /api/companias/{compania}/usuarios/{id}/
     """
  
-    def _get(self, compania_id, id):
-        return get_object_or_404(Usuario, id=id, compania_id=compania_id)
+    def _get(self, compania, id):
+        return get_object_or_404(Usuario, id=id, compania=compania)
  
-    def get(self, request, compania_id, id):
+    def get(self, request, compania, id):
         return Response(
-            UsuarioSerializer(self._get(compania_id, id)).data,
+            UsuarioSerializer(self._get(compania, id)).data,
             status=status.HTTP_200_OK,
         )
  
-    def put(self, request, compania_id, id):
-        usuario = self._get(compania_id, id)
+    def put(self, request, compania, id):
+        usuario = self._get(compania, id)
         data = request.data.copy()
-        data["compania"] = compania_id
+        data["compania"] = compania
         serializer = UsuarioSerializer(usuario, data=data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
  
-    def delete(self, request, compania_id, id):
-        self._get(compania_id, id).delete()
+    def delete(self, request, compania, id):
+        self._get(compania, id).delete()
         return Response(
             {"message": "Usuario eliminado correctamente"},
             status=status.HTTP_200_OK,

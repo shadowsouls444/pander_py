@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import EstadoVacante, TipoContrato, Vacante
- 
+from .models_vistas_sql import VVacante
  
 class EstadoVacanteSerializer(serializers.ModelSerializer):
     class Meta:
@@ -37,4 +37,9 @@ class VacanteSerializer(serializers.ModelSerializer):
             "fecha_modificacion", "usuario_modificacion",
         ]
         read_only_fields = ["id", "fecha_creacion", "fecha_modificacion"]
+
+class VVacanteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = VVacante
+        fields = "__all__"
  

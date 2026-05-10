@@ -1,5 +1,5 @@
 from django.urls import path
-from . import views
+from . import views, views_vistas_sql
  
 urlpatterns = [
     # Catálogos globales
@@ -9,8 +9,12 @@ urlpatterns = [
     path("tipos-contrato/<int:id>/",    views.TipoContratoDetail.as_view(),  name="tipo-contrato-detail"),
  
     # Vacantes (anidadas bajo compañía)
-    path("companias/<int:compania_id>/vacantes/",
+    path("companias/<int:compania>/vacantes/",
          views.VacanteList.as_view(),   name="vacante-list"),
-    path("companias/<int:compania_id>/vacantes/<int:id>/",
+    path("companias/<int:compania>/vacantes/<int:id>/",
          views.VacanteDetail.as_view(), name="vacante-detail"),
+
+     #Vistas
+    path("v/companias/<int:compania>/vacantes/",          views_vistas_sql.VVacanteListView.as_view(),    name="v-vacante-list"),
+    path("v/companias/<int:compania>/vacantes/<int:id>/", views_vistas_sql.VVacanteDetailView.as_view(),  name="v-vacante-detail"),
 ]

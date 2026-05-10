@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import Rol, Modulo, RolModulo, Analista, Usuario
+from .models_vistas_sql import VRol, VModulo, VAnalista, VUsuario
  
  
 class RolSerializer(serializers.ModelSerializer):
@@ -66,4 +67,24 @@ class UsuarioSerializer(serializers.ModelSerializer):
             "fecha_modificacion", "usuario_modificacion",
         ]
         read_only_fields = ["id", "fecha_creacion", "fecha_modificacion"]
+
+class VRolSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = VRol
+        fields = "__all__"
+ 
+class VModuloSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = VModulo
+        fields = "__all__"
+ 
+class VAnalistaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = VAnalista
+        fields = "__all__"
+ 
+class VUsuarioSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = VUsuario
+        fields = "__all__"
  
