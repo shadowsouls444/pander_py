@@ -51,6 +51,7 @@ password: pander_py_12345
 - djangorestframework
 - virtualenv
 - mssql-django
+- django-cors-headers
 
 ### PASO A PASO PARA CREAR UN PROYECTO EN DJANGO
 `NOTA`: Primero asegurate de tener el paquete instalado `Django`
