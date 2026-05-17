@@ -1,360 +1,258 @@
 """
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-evaluacion/cat_engine.py
-MOTOR CAT — Computerized Adaptive Testing con modelo TRI 3PL
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Implementa:
-  - Modelo TRI de 3 parámetros (3PL)
-  - Estimación de habilidad por MLE (Máxima Verosimilitud)
-  - Selección de ítems por Máxima Información de Fisher
-  - Criterio de parada por error estándar o número máximo de ítems
+evaluacion/cat_engine.py  — v6 corregido
+Bugs corregidos vs versión anterior:
+  - siguiente_pregunta(): filtra por ind_activa (no estado), usa contenido
+    (no texto), no filtra por compania (Pregunta es banco global),
+    retorna pregunta_id (no id) para que el frontend lo envíe correctamente.
+  - obtener_respuestas_previas(): ids_usados es set de int (pk), no de objetos.
+  - finalizar(): usa estado FK (objeto), no estado_id (int raw).
+  - MotorCAT.__init__: usa compania_id como lookup de Intento.
 """
-
 import math
 from typing import Optional
 from django.utils import timezone
 from django.db import transaction
-from apps.empresa.models import Compania
-from apps.evaluacion.models import Pregunta, RespuestaCandidato, EstadoIntento, Intento, Respuesta, HistorialHabilidadEstim
-from .models import (
-            Pregunta,
-            Respuesta,
-            RespuestaCandidato,
-            HistorialHabilidadEstim,
-            Intento,
-        )
 
-# ════════════════════════════════════════════════════════════
-# MODELO TRI — 3 PARÁMETROS
-# ════════════════════════════════════════════════════════════
+from .models import (
+    Pregunta, Respuesta, RespuestaCandidato,
+    HistorialHabilidadEstim, Intento, EstadoIntento,
+)
+
+
+# ═══════════════════════════════════════════════════════════════
+# TRI 3PL — funciones puras
+# ═══════════════════════════════════════════════════════════════
 
 def probabilidad_correcta(theta: float, a: float, b: float, c: float) -> float:
-    """
-    Función característica del ítem (ICC) modelo 3PL.
-    P(X=1|θ) = c + (1-c) * [1 / (1 + e^(-1.7*a*(θ-b)))]
-
-    Args:
-        theta : nivel de habilidad del candidato (-3 a +3)
-        a     : parámetro de discriminación
-        b     : parámetro de dificultad
-        c     : parámetro de adivinabilidad
-
-    Returns:
-        Probabilidad de respuesta correcta (0.0 a 1.0)
-    """
-    exponente = -1.7 * a * (theta - b)
-    # Clamp para evitar overflow en exp
-    exponente = max(-500, min(500, exponente))
-    return c + (1 - c) * (1 / (1 + math.exp(exponente)))
+    e = max(-500.0, min(500.0, -1.7 * a * (theta - b)))
+    return c + (1 - c) / (1 + math.exp(e))
 
 
 def informacion_fisher(theta: float, a: float, b: float, c: float) -> float:
-    """
-    Información de Fisher del ítem en θ.
-    I(θ) = (1.7²) * a² * [(P(θ) - c)² / ((1-c)² * P(θ) * (1-P(θ)))]
-
-    Mayor información → el ítem discrimina mejor en ese nivel de θ.
-    """
     p = probabilidad_correcta(theta, a, b, c)
     q = 1 - p
     if p <= 0 or q <= 0:
         return 0.0
-    numerador   = (p - c) ** 2
-    denominador = ((1 - c) ** 2) * p * q
-    if denominador == 0:
+    den = ((1 - c) ** 2) * p * q
+    if den == 0:
         return 0.0
-    return (1.7 ** 2) * (a ** 2) * (numerador / denominador)
+    return (1.7 ** 2) * (a ** 2) * ((p - c) ** 2) / den
 
 
 def error_estandar(info_total: float) -> float:
-    """
-    SE(θ) = 1 / sqrt(I_total(θ))
-    La suma de información de todos los ítems respondidos.
-    """
-    if info_total <= 0:
-        return 999.0
-    return 1 / math.sqrt(info_total)
+    return 1 / math.sqrt(info_total) if info_total > 0 else 999.0
 
-
-# ════════════════════════════════════════════════════════════
-# ESTIMACIÓN DE HABILIDAD — MLE (Newton-Raphson)
-# ════════════════════════════════════════════════════════════
 
 def estimar_theta(
-    respuestas: list[dict],   # [{"a": float, "b": float, "c": float, "correcto": bool}]
+    respuestas: list,
     theta_inicial: float = 0.0,
     max_iter: int = 50,
     tolerancia: float = 0.001,
 ) -> float:
-    """
-    Estimación de θ por Máxima Verosimilitud usando Newton-Raphson.
-
-    Para evitar estimaciones en ±infinito con patrones de respuesta
-    perfectos (todos correctos / todos incorrectos), aplica un límite
-    de θ entre -4 y +4.
-
-    Args:
-        respuestas    : lista de respuestas con parámetros del ítem
-        theta_inicial : punto de inicio de la estimación
-        max_iter      : iteraciones máximas
-        tolerancia    : convergencia mínima entre iteraciones
-
-    Returns:
-        theta estimado
-    """
     if not respuestas:
         return 0.0
-
     theta = theta_inicial
-
     for _ in range(max_iter):
-        primera_derivada  = 0.0
-        segunda_derivada  = 0.0
-
+        d1 = d2 = 0.0
         for r in respuestas:
-            a = r["a"]
-            b = r["b"]
-            c = r["c"]
+            a, b, c = r["a"], r["b"], r["c"]
             u = 1 if r["correcto"] else 0
-
             p = probabilidad_correcta(theta, a, b, c)
             q = 1 - p
-
             if p <= 0 or q <= 0:
                 continue
-
-            # Primera derivada de la log-verosimilitud
             factor = (1.7 * a * (p - c)) / ((1 - c) * p)
-            primera_derivada += factor * (u - p) / p
-
-            # Segunda derivada (aproximación)
-            segunda_derivada -= (1.7 ** 2) * (a ** 2) * ((p - c) / (1 - c)) ** 2 * (q / p)
-
-        if segunda_derivada == 0:
+            d1 += factor * (u - p) / p
+            d2 -= (1.7 ** 2) * (a ** 2) * ((p - c) / (1 - c)) ** 2 * (q / p)
+        if d2 == 0:
             break
-
-        delta = primera_derivada / segunda_derivada
-        theta -= delta
-
-        # Limitar θ al rango razonable
-        theta = max(-4.0, min(4.0, theta))
-
+        delta = d1 / d2
+        theta = max(-4.0, min(4.0, theta - delta))
         if abs(delta) < tolerancia:
             break
-
     return round(theta, 6)
 
 
-# ════════════════════════════════════════════════════════════
-# SELECCIÓN DEL SIGUIENTE ÍTEM
-# ════════════════════════════════════════════════════════════
-
-def seleccionar_siguiente_item(
-    theta: float,
-    items_disponibles: list[dict],
-    ids_usados: set[int],
-) -> Optional[dict]:
-    """
-    Selecciona el ítem con mayor información de Fisher
-    en el nivel de θ actual del candidato,
-    excluyendo ítems ya presentados en este intento.
-
-    Args:
-        theta             : estimación actual del candidato
-        items_disponibles : lista de dicts con {id, a, b, c}
-        ids_usados        : IDs de preguntas ya presentadas
-
-    Returns:
-        dict del ítem seleccionado o None si no hay disponibles
-    """
-    candidatos = [i for i in items_disponibles if i["id"] not in ids_usados]
-    if not candidatos:
-        return None
-
-    mejor      = None
-    max_info   = -1.0
-
-    for item in candidatos:
-        info = informacion_fisher(theta, item["a"], item["b"], item["c"])
-        if info > max_info:
-            max_info = info
-            mejor    = item
-
-    return mejor
-
-
-# ════════════════════════════════════════════════════════════
-# MOTOR PRINCIPAL DEL CAT
-# ════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+# MOTOR PRINCIPAL
+# ═══════════════════════════════════════════════════════════════
 
 class MotorCAT:
-    """
-    Motor de evaluación adaptativa para una habilidad específica.
+    MAX_ITEMS = 8
+    MIN_ITEMS = 3
+    UMBRAL_SE = 0.35
 
-    Parámetros de configuración:
-        max_items     : número máximo de preguntas por habilidad
-        min_items     : número mínimo antes de poder terminar
-        umbral_se     : error estándar mínimo para detener (precisión)
-    """
+    def __init__(self, intento_id: int, compania_id: int, habilidad_id: int):
+        self.intento_id   = int(intento_id)
+        self.compania_id  = int(compania_id)
+        self.habilidad_id = int(habilidad_id)
 
-    MAX_ITEMS   = 8
-    MIN_ITEMS   = 3
-    UMBRAL_SE   = 0.35   # SE < 0.35 equivale a aprox. ±0.7 puntos de θ
-
-    def __init__(self, intento_id, compania_id, habilidad_id):
-
-        self.intento_id = intento_id
-        self.compania_id = compania_id
-        self.habilidad_id = habilidad_id
-
-        self.intento = Intento.objects.get(
-            id=intento_id,
-            compania_id=compania_id
+        # Cargar intento filtrando por compania_id (no el objeto)
+        self.intento = Intento.objects.select_related("estado", "evaluacion").get(
+            id=self.intento_id,
+            compania_id=self.compania_id,
         )
 
-        self.compania = self.intento.compania
+    # ── Banco de ítems ─────────────────────────────────────────
+    def obtener_items_banco(self) -> list:
+        """
+        Pregunta NO tiene campo compania — es banco global.
+        Filtra por habilidad e ind_activa (campo correcto del modelo).
+        """
+        return list(
+            Pregunta.objects.filter(
+                habilidad_id=self.habilidad_id,
+                ind_activa=True,              # ← campo correcto (no 'estado')
+            ).values("id", "criterio_a", "criterio_b", "criterio_c")
+        )
 
-        self.habilidad_id = habilidad_id
-
-    def obtener_items_banco(self) -> list[dict]:
-        """Carga los ítems activos de la habilidad desde la BD."""
-        preguntas = Pregunta.objects.filter(
-            habilidad=self.habilidad_id,
-            ind_activa=True,
-        ).values("id", "criterio_a", "criterio_b", "criterio_c")
-        return [
-            {"id": p["id"], "a": p["criterio_a"], "b": p["criterio_b"], "c": p["criterio_c"]}
-            for p in preguntas
-        ]
-
-    def obtener_respuestas_previas(self) -> tuple[list[dict], set[int]]:
-        """Carga respuestas ya registradas en este intento para esta habilidad."""
-
+    # ── Respuestas previas ─────────────────────────────────────
+    def obtener_respuestas_previas(self) -> tuple:
+        """
+        ids_usados: set de int (pregunta_id), NO de objetos.
+        """
         registros = RespuestaCandidato.objects.filter(
-            compania=self.compania,
-            intento=self.intento,
-            pregunta__habilidad=self.habilidad_id,
+            compania_id=self.compania_id,
+            intento_id=self.intento_id,
+            pregunta__habilidad_id=self.habilidad_id,
         ).select_related("pregunta", "respuesta")
 
-        respuestas_data = []
-        ids_usados      = set()
-
+        datos, ids_usados = [], set()
         for rc in registros:
-            ids_usados.add(rc.pregunta)
-            respuestas_data.append({
-                "a":        rc.pregunta.criterio_a,
-                "b":        rc.pregunta.criterio_b,
-                "c":        rc.pregunta.criterio_c,
+            ids_usados.add(rc.pregunta_id)          # ← int, no objeto
+            datos.append({
+                "a": rc.pregunta.criterio_a,
+                "b": rc.pregunta.criterio_b,
+                "c": rc.pregunta.criterio_c,
                 "correcto": rc.respuesta.ind_correcta,
             })
+        return datos, ids_usados
 
-        return respuestas_data, ids_usados
+    # ── Siguiente pregunta ─────────────────────────────────────
+    def siguiente_pregunta(self) -> Optional[dict]:
+        """
+        Selecciona el ítem con mayor información de Fisher.
+        Aplica criterios de parada (MAX_ITEMS, SE < UMBRAL).
+        Retorna dict con pregunta_id (no id) para que el frontend
+        lo devuelva correctamente en /responder/.
+        """
+        respuestas_data, ids_usados = self.obtener_respuestas_previas()
+        n = len(ids_usados)
 
-    def siguiente_pregunta(self):
-        respondidas = RespuestaCandidato.objects.filter(
-            compania=self.compania,
-            intento=self.intento
-        ).values_list("pregunta_id", flat=True)
+        # Criterios de parada
+        if n >= self.MAX_ITEMS:
+            return None
+        if n >= self.MIN_ITEMS and respuestas_data:
+            theta_act = estimar_theta(respuestas_data)
+            info = sum(
+                informacion_fisher(theta_act, r["a"], r["b"], r["c"])
+                for r in respuestas_data
+            )
+            if error_estandar(info) < self.UMBRAL_SE:
+                return None
 
-        pregunta = Pregunta.objects.filter(
-            compania=self.compania,
-            habilidad_id=self.habilidad_id,
-            estado=True
-        ).exclude(
-            id__in=respondidas
-        ).first()
+        theta = estimar_theta(respuestas_data) if respuestas_data else 0.0
 
-        if not pregunta:
+        # Seleccionar ítem con mayor información excluyendo los ya usados
+        banco = self.obtener_items_banco()
+        candidatos = [i for i in banco if i["id"] not in ids_usados]
+        if not candidatos:
+            return None
+
+        mejor = max(
+            candidatos,
+            key=lambda i: informacion_fisher(theta, i["a"], i["b"], i["c"])
+        )
+
+        try:
+            preg = Pregunta.objects.prefetch_related("respuestas").get(id=mejor["id"])
+        except Pregunta.DoesNotExist:
             return None
 
         return {
-            "id": pregunta.id,
-            "texto": pregunta.texto,
-            "respuestas": [
-                {
-                    "id": r.id,
-                    "texto": r.texto
-                }
-                for r in pregunta.respuestas.all()
-            ]
+            "pregunta_id": preg.id,           # ← frontend envía pregunta_id
+            "contenido":   preg.contenido,    # ← campo correcto del modelo (no texto)
+            "numero":      n + 1,
+            "opciones": [
+                {"id": r.id, "contenido": r.contenido}   # ← contenido (no texto)
+                for r in preg.respuestas.all()
+            ],
         }
 
+    # ── Registrar respuesta ────────────────────────────────────
     @transaction.atomic
-    def registrar_respuesta(self, pregunta: int, respuesta: int, tiempo_seg: int) -> dict:
-
-        pregunta_obj  = Pregunta.objects.get(id=pregunta)
-        respuesta_obj = Respuesta.objects.get(id=respuesta)
-
+    def registrar_respuesta(
+        self, pregunta_id: int, respuesta_id: int, tiempo_seg: int
+    ) -> dict:
+        preg_obj = Pregunta.objects.get(id=pregunta_id)
+        resp_obj = Respuesta.objects.get(id=respuesta_id)
         now = timezone.now()
 
-        RespuestaCandidato.objects.create(
-            compania=self.compania,
-            intento=self.intento,
-            pregunta=pregunta_obj,
-            respuesta=respuesta_obj,
-            tiempo_respuesta=tiempo_seg,
-            fecha_respuesta=now,
-            fecha_creacion=now,
+        # Evitar duplicado (unique_together: compania, intento, pregunta)
+        RespuestaCandidato.objects.get_or_create(
+            compania_id=self.compania_id,
+            intento_id=self.intento_id,
+            pregunta=preg_obj,
+            defaults={
+                "respuesta":        resp_obj,
+                "tiempo_respuesta": tiempo_seg,
+                "fecha_respuesta":  now,
+                "fecha_creacion":   now,
+            }
         )
 
+        # Re-estimar θ con las respuestas acumuladas de esta habilidad
         respuestas_data, ids_usados = self.obtener_respuestas_previas()
-
-        theta_nuevo = estimar_theta(respuestas_data)
-
-        info_total = sum(
-            informacion_fisher(
-                theta_nuevo,
-                r["a"],
-                r["b"],
-                r["c"]
-            )
+        theta = estimar_theta(respuestas_data)
+        info  = sum(
+            informacion_fisher(theta, r["a"], r["b"], r["c"])
             for r in respuestas_data
         )
-
-        se_nuevo = error_estandar(info_total)
-
+        se   = error_estandar(info)
         paso = len(ids_usados)
 
         HistorialHabilidadEstim.objects.create(
-            compania=self.compania,
-            intento=self.intento,
-            habilidad_estim=theta_nuevo,
-            error_estandar=se_nuevo,
+            compania_id=self.compania_id,
+            intento_id=self.intento_id,
+            habilidad_estim=theta,
+            error_estandar=se,
             paso=paso,
             fecha_creacion=now,
         )
 
         Intento.objects.filter(
-            compania=self.compania,
-            id=self.intento_id
+            compania_id=self.compania_id,
+            id=self.intento_id,
         ).update(
-            habilidad_estim=theta_nuevo,
-            error_estandar=se_nuevo,
+            habilidad_estim=theta,
+            error_estandar=se,
             fecha_modificacion=now,
         )
 
-        return {
-            "theta": theta_nuevo,
-            "error_estandar": se_nuevo,
-            "paso": paso,
-            "correcto": respuesta_obj.ind_correcta,
-        }
+        return {"theta": theta, "error_estandar": se, "paso": paso,
+                "correcto": resp_obj.ind_correcta}
 
+    # ── Finalizar ──────────────────────────────────────────────
     def finalizar(self) -> dict:
-        """
-        Finaliza el intento: marca como COMPLETADO y retorna el resultado final.
-        """
+        # Obtener el objeto de estado (no el ID raw)
+        estado_comp = EstadoIntento.objects.filter(descripcion="Completado").first()
+        now = timezone.now()
 
-        estado_completado = EstadoIntento.objects.get(descripcion="Completado")
-        intento = Intento.objects.get(compania=self.compania, id=self.intento)
+        Intento.objects.filter(
+            compania_id=self.compania_id,
+            id=self.intento_id,
+        ).update(
+            estado=estado_comp,          # ← objeto FK, no .id
+            fecha_fin=now,
+            fecha_modificacion=now,
+        )
 
-        intento.estado          = estado_completado.id
-        intento.fecha_fin          = timezone.now()
-        intento.fecha_modificacion = timezone.now()
-        intento.save(update_fields=["estado", "fecha_fin", "fecha_modificacion"])
+        # Recargar para obtener valores actualizados
+        intento = Intento.objects.get(
+            id=self.intento_id, compania_id=self.compania_id)
 
         return {
-            "intento":     self.intento,
+            "intento_id":     self.intento_id,
             "theta_final":    intento.habilidad_estim,
             "error_estandar": intento.error_estandar,
             "nivel":          self._clasificar_nivel(intento.habilidad_estim),
@@ -362,15 +260,9 @@ class MotorCAT:
 
     @staticmethod
     def _clasificar_nivel(theta: Optional[float]) -> str:
-        """Convierte θ en nivel descriptivo para el reporte."""
-        if theta is None:
-            return "Sin datos"
-        if theta >= 1.5:
-            return "Sobresaliente"
-        if theta >= 0.5:
-            return "Alto"
-        if theta >= -0.5:
-            return "Medio"
-        if theta >= -1.5:
-            return "Bajo"
+        if theta is None: return "Sin datos"
+        if theta >= 1.5:  return "Sobresaliente"
+        if theta >= 0.5:  return "Alto"
+        if theta >= -0.5: return "Medio"
+        if theta >= -1.5: return "Bajo"
         return "Muy bajo"
