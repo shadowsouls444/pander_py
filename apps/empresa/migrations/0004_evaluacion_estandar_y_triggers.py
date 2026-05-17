@@ -84,7 +84,7 @@ def insertar_evaluacion_estandar(apps, schema_editor):
     EvaluacionHabilidad = apps.get_model("evaluacion", "EvaluacionHabilidad")
     Compania            = apps.get_model("empresa",    "Compania")
 
-    compania_sistema = Compania.objects.get(nit="00000")
+    compania_sistema = Compania.objects.get(nit="0000")
     uid = 1
 
     evaluacion = Evaluacion.objects.create(

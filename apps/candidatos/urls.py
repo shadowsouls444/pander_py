@@ -1,56 +1,42 @@
 from django.urls import path
-from . import views, views_vistas_sql
+from . import views
 
 urlpatterns = [
-    # Catálogos globales
-    path("tipos-documento/",
-         views.TipoDocumentoList.as_view(),   name="tipo-documento-list"),
-    path("tipos-documento/<int:id>/",
-         views.TipoDocumentoDetail.as_view(), name="tipo-documento-detail"),
- 
-    path("estados-postulacion/",
-         views.EstadoPostulacionList.as_view(),   name="estado-postulacion-list"),
-    path("estados-postulacion/<int:id>/",
-         views.EstadoPostulacionDetail.as_view(), name="estado-postulacion-detail"),
- 
-    # Candidatos (anidados bajo compañía)
+    # Catálogos
+    path("tipos-documento/",              views.TipoDocumentoList.as_view(),    name="tipo-doc-list"),
+    path("tipos-documento/<int:id>/",     views.TipoDocumentoDetail.as_view(),  name="tipo-doc-detail"),
+    path("estados-postulacion/",          views.EstadoPostulacionList.as_view(),  name="estado-post-list"),
+    path("estados-postulacion/<int:id>/", views.EstadoPostulacionDetail.as_view(),name="estado-post-detail"),
+
+    # Candidatos
     path("companias/<int:compania>/candidatos/",
          views.CandidatoList.as_view(),   name="candidato-list"),
     path("companias/<int:compania>/candidatos/<int:id>/",
          views.CandidatoDetail.as_view(), name="candidato-detail"),
- 
+
     # Datos personales del candidato (1:1)
-    path("companias/<int:compania>/candidatos/<int:candidato>/datos/",
+    path("companias/<int:compania>/candidatos/<int:candidato_id>/datos/",
          views.DatosCandidatoDetail.as_view(), name="datos-candidato"),
- 
-    # Anexos del candidato
-    path("companias/<int:compania>/candidatos/<int:candidato>/anexos/",
-         views.AnexoCandidatoList.as_view(),   name="anexo-candidato-list"),
-    path("companias/<int:compania>/candidatos/<int:candidato>/anexos/<int:id>/",
-         views.AnexoCandidatoDetail.as_view(), name="anexo-candidato-detail"),
- 
-    # Postulaciones (anidadas bajo compañía)
+
+    # Anexos / CV
+    path("companias/<int:compania>/candidatos/<int:candidato_id>/anexos/",
+         views.AnexoCandidatoList.as_view(),   name="anexo-list"),
+    path("companias/<int:compania>/candidatos/<int:candidato_id>/anexos/<int:id>/",
+         views.AnexoCandidatoDetail.as_view(), name="anexo-detail"),
+
+    # Postulaciones
     path("companias/<int:compania>/postulaciones/",
          views.PostulacionList.as_view(),   name="postulacion-list"),
     path("companias/<int:compania>/postulaciones/<int:id>/",
          views.PostulacionDetail.as_view(), name="postulacion-detail"),
- 
-    # Tokens de postulación
-    path("companias/<int:compania>/postulaciones/<int:postulacion>/tokens/",
-         views.PostulacionTokenList.as_view(), name="postulacion-token-list"),
 
-     path("companias/<int:compania>/reporte-postulaciones/",
-     views.ReportePostulacionList.as_view(), name="reporte-postulacion"),
+    # Reporte
+    path("companias/<int:compania>/reporte-postulaciones/",
+         views.ReportePostulacionList.as_view(), name="reporte-postulaciones"),
 
-     #Vistas
+    # Vistas SQL
     path("v/companias/<int:compania>/candidatos/",
-         views_vistas_sql.VCandidatoListView.as_view(),   name="v-candidato-list"),
-    path("v/companias/<int:compania>/candidatos/<int:id>/",
-         views_vistas_sql.VCandidatoDetailView.as_view(), name="v-candidato-detail"),
+         views.VCandidatoListView.as_view(),   name="v-candidato-list"),
     path("v/companias/<int:compania>/postulaciones/",
-         views_vistas_sql.VPostulacionListView.as_view(),   name="v-postulacion-list"),
-    path("v/companias/<int:compania>/postulaciones/<int:id>/",
-         views_vistas_sql.VPostulacionDetailView.as_view(), name="v-postulacion-detail"),
-    path("v/companias/<int:compania>/candidatos/<int:candidato>/anexos/",
-         views_vistas_sql.VAnexoCandidatoListView.as_view(), name="v-anexo-candidato-list"),
+         views.VPostulacionListView.as_view(), name="v-postulacion-list"),
 ]

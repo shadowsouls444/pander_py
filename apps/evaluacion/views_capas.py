@@ -34,14 +34,14 @@ class ConfigEvaluacionList(APIView):
     """
  
     def get(self, request, compania):
-        from evaluacion.models import VEvaluacion
+        from apps.evaluacion.models import VEvaluacion
         from evaluacion.serializers import VEvaluacionSerializer
  
         qs = VEvaluacion.objects.filter(compania=compania)
         return Response(VEvaluacionSerializer(qs, many=True).data)
  
     def post(self, request, compania):
-        from evaluacion.models import Evaluacion
+        from apps.evaluacion.models import Evaluacion
         from evaluacion.serializers import EvaluacionSerializer
  
         data = request.data.copy()
@@ -66,13 +66,13 @@ class ConfigEvaluacionDetail(APIView):
     """
  
     def get(self, request, compania, id):
-        from evaluacion.models import VEvaluacion
+        from apps.evaluacion.models import VEvaluacion
         from evaluacion.serializers import VEvaluacionSerializer
         obj = get_object_or_404(VEvaluacion, id=id, compania=compania)
         return Response(VEvaluacionSerializer(obj).data)
  
     def put(self, request, compania, id):
-        from evaluacion.models import Evaluacion
+        from apps.evaluacion.models import Evaluacion
         from evaluacion.serializers import EvaluacionSerializer
         ev = get_object_or_404(Evaluacion, id=id, compania=compania)
         data = request.data.copy()
@@ -84,7 +84,7 @@ class ConfigEvaluacionDetail(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
  
     def delete(self, request, compania, id):
-        from evaluacion.models import Evaluacion
+        from apps.evaluacion.models import Evaluacion
         get_object_or_404(Evaluacion, id=id, compania=compania).delete()
         return Response({"message": "Evaluación eliminada."}, status=status.HTTP_200_OK)
  
@@ -96,7 +96,7 @@ class ConfigHabilidadBancoList(APIView):
     """
  
     def get(self, request):
-        from evaluacion.models import VHabilidad
+        from apps.evaluacion.models import VHabilidad
         from evaluacion.serializers import VHabilidadSerializer
         qs = VHabilidad.objects.all()
         if request.query_params.get("activas") == "1":
@@ -111,13 +111,13 @@ class ConfigPreguntaBancoList(APIView):
     """
  
     def get(self, request, habilidad):
-        from evaluacion.models import VPregunta
+        from apps.evaluacion.models import VPregunta
         from evaluacion.serializers import VPreguntaSerializer
         qs = VPregunta.objects.filter(habilidad=habilidad)
         return Response(VPreguntaSerializer(qs, many=True).data)
  
     def post(self, request, habilidad):
-        from evaluacion.models import Pregunta, Respuesta, ControlUso
+        from apps.evaluacion.models import Pregunta, Respuesta, ControlUso
         from evaluacion.serializers import PreguntaSerializer
         from django.utils import timezone
  
@@ -152,7 +152,7 @@ class ConfigAsignarHabilidad(APIView):
     """
  
     def post(self, request, compania, eval):
-        from evaluacion.models import EvaluacionHabilidad, Evaluacion, Habilidad
+        from apps.evaluacion.models import EvaluacionHabilidad, Evaluacion, Habilidad
         from evaluacion.serializers import EvaluacionHabilidadSerializer
  
         get_object_or_404(Evaluacion, id=eval, compania=compania)
@@ -166,7 +166,7 @@ class ConfigAsignarHabilidad(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
  
     def delete(self, request, compania, eval, hab):
-        from evaluacion.models import EvaluacionHabilidad
+        from apps.evaluacion.models import EvaluacionHabilidad
         rel = get_object_or_404(
             EvaluacionHabilidad,
             compania=compania, evaluacion=eval, habilidad=hab
@@ -197,11 +197,11 @@ class PostularCandidatoView(APIView):
     """
  
     def post(self, request, compania):
-        from candidatos.models import (
+        from apps.candidatos.models import (
             Postulacion, EstadoPostulacion,
             DatosCandidato, PostulacionToken,
         )
-        from vacantes.models import Vacante
+        from apps.vacantes.models import Vacante
         from evaluacion.services import ServicioPostulacion
         from django.utils import timezone
         import time
@@ -238,7 +238,7 @@ class PostularCandidatoView(APIView):
         time.sleep(0.1)  # pequeña espera para que el trigger actúe
  
         evaluacion = None
-        from evaluacion.models import Intento
+        from apps.evaluacion.models import Intento
         intento_obj = Intento.objects.filter(
             compania=compania,
             postulacion=postulacion.id,
@@ -285,7 +285,7 @@ class ReportePostulacionesView(APIView):
     """
  
     def get(self, request, compania):
-        from evaluacion.models import VReportePostulacion
+        from apps.evaluacion.models import VReportePostulacion
         from evaluacion.serializers import VReportePostulacionSerializer
  
         qs = VReportePostulacion.objects.filter(compania=compania)
@@ -313,7 +313,7 @@ class DecisionPostulacionView(APIView):
     """
  
     def put(self, request, compania, id):
-        from candidatos.models import Postulacion, EstadoPostulacion
+        from apps.candidatos.models import Postulacion, EstadoPostulacion
  
         postulacion = get_object_or_404(Postulacion, id=id, compania=compania)
         nuevo_estado_desc = request.data.get("estado")
@@ -355,7 +355,7 @@ class AccesoEvaluacionView(APIView):
  
     def get(self, request):
         from evaluacion.services import ServicioPostulacion
-        from evaluacion.models import Intento, VIntento
+        from apps.evaluacion.models import Intento, VIntento
         from evaluacion.serializers import VIntentoSerializer
         from evaluacion.cat_engine import MotorCAT
  
@@ -391,7 +391,7 @@ class AccesoEvaluacionView(APIView):
             )
  
         # Obtener habilidades de la evaluación en orden
-        from evaluacion.models import EvaluacionHabilidad
+        from apps.evaluacion.models import EvaluacionHabilidad
         habilidades = EvaluacionHabilidad.objects.filter(
             compania  = token_obj.compania,
             evaluacion = intento.evaluacion,
@@ -447,7 +447,7 @@ class ResponderPreguntaView(APIView):
     def post(self, request):
         from evaluacion.services import ServicioPostulacion
         from evaluacion.cat_engine import MotorCAT
-        from evaluacion.models import EvaluacionHabilidad, Intento
+        from apps.evaluacion.models import EvaluacionHabilidad, Intento
  
         token = request.data.get("token")
         llave = request.data.get("llave")

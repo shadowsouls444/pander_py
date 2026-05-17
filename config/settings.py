@@ -69,8 +69,6 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-CORS_ALLOW_ALL_ORIGINS = True
-
 ROOT_URLCONF = 'config.urls'
 
 TEMPLATES = [
@@ -125,6 +123,38 @@ DATABASES = {
         'PORT': '5433',
     }
     
+}
+
+# ── URL base del frontend (para generar enlaces de evaluación) ─
+FRONTEND_URL = 'http://localhost:5173'
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# ── Archivos subidos (CV candidatos) ──────────────────────────
+MEDIA_URL  = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
+# ── CORS ──────────────────────────────────────────────────────
+CORS_ALLOW_ALL_ORIGINS = True   # Solo desarrollo. En producción usar CORS_ALLOWED_ORIGINS
+
+EMAIL_BACKEND      = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST         = 'smtp.gmail.com'
+EMAIL_PORT         = 587
+EMAIL_USE_TLS      = True
+EMAIL_USE_SSL      = False
+EMAIL_HOST_USER    = 'johan.ramirez.beltran@gmail.com'
+EMAIL_HOST_PASSWORD = 'dbdc ejgg mmzu uggl'
+DEFAULT_FROM_EMAIL = 'Pander Notificaciones <johan.ramirez.beltran@gmail.com>'
+
+# ── DRF ───────────────────────────────────────────────────────
+REST_FRAMEWORK = {
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+    ],
+    'DEFAULT_PARSER_CLASSES': [
+        'rest_framework.parsers.JSONParser',
+        'rest_framework.parsers.MultiPartParser',   # ← para subida de archivos
+        'rest_framework.parsers.FormParser',
+    ],
 }
 
 # Password validation

@@ -8,14 +8,14 @@ Cada app expone su propio urls.py que se incluye aquí.
  
 from django.contrib import admin
 from django.urls import path, include
- 
+from django.conf import settings
+from django.conf.urls.static import static
+
 urlpatterns = [
-    path("admin/", admin.site.urls),
-    path("api/", include([
-        path("empresa/", include("apps.empresa.urls")),
-        path("acceso/", include("apps.acceso.urls")),
-        path("vacantes/", include("apps.vacantes.urls")),
-        path("candidatos/", include("apps.candidatos.urls")),
-        path("evaluacion/", include("apps.evaluacion.urls")),
-    ])),
-]
+    path('admin/', admin.site.urls),
+    path('api/empresa/',    include('apps.empresa.urls')),
+    path('api/acceso/',     include('apps.acceso.urls')),
+    path('api/vacantes/',   include('apps.vacantes.urls')),
+    path('api/candidatos/', include('apps.candidatos.urls')),
+    path('api/evaluacion/', include('apps.evaluacion.urls')),
+] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

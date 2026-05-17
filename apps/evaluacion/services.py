@@ -30,7 +30,7 @@ class ServicioPostulacion:
         el token. Este método es el fallback si los triggers están desactivados
         (entornos de desarrollo sin SQL Server).
         """
-        from candidatos.models import PostulacionToken, Postulacion
+        from apps.candidatos.models import PostulacionToken, Postulacion
  
         token_existente = PostulacionToken.objects.filter(
             compania=compania,
@@ -116,7 +116,7 @@ Equipo Pander
         Valida que el token exista, no haya expirado y la llave coincida.
         Retorna (token_obj, error_msg)
         """
-        from candidatos.models import PostulacionToken
+        from apps.candidatos.models import PostulacionToken
  
         try:
             token_obj = PostulacionToken.objects.select_related(

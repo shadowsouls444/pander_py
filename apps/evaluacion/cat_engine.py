@@ -14,7 +14,15 @@ import math
 from typing import Optional
 from django.utils import timezone
 from django.db import transaction
-
+from apps.empresa.models import Compania
+from apps.evaluacion.models import Pregunta, RespuestaCandidato, EstadoIntento, Intento, Respuesta, HistorialHabilidadEstim
+from .models import (
+            Pregunta,
+            Respuesta,
+            RespuestaCandidato,
+            HistorialHabilidadEstim,
+            Intento,
+        )
 
 # ════════════════════════════════════════════════════════════
 # MODELO TRI — 3 PARÁMETROS
@@ -193,16 +201,25 @@ class MotorCAT:
     MIN_ITEMS   = 3
     UMBRAL_SE   = 0.35   # SE < 0.35 equivale a aprox. ±0.7 puntos de θ
 
-    def __init__(self, intento: int, compania: int, habilidad: int):
-        self.intento   = intento
-        self.compania  = compania
-        self.habilidad = habilidad
+    def __init__(self, intento_id, compania_id, habilidad_id):
+
+        self.intento_id = intento_id
+        self.compania_id = compania_id
+        self.habilidad_id = habilidad_id
+
+        self.intento = Intento.objects.get(
+            id=intento_id,
+            compania_id=compania_id
+        )
+
+        self.compania = self.intento.compania
+
+        self.habilidad_id = habilidad_id
 
     def obtener_items_banco(self) -> list[dict]:
         """Carga los ítems activos de la habilidad desde la BD."""
-        from evaluacion.models import Pregunta
         preguntas = Pregunta.objects.filter(
-            habilidad=self.habilidad,
+            habilidad=self.habilidad_id,
             ind_activa=True,
         ).values("id", "criterio_a", "criterio_b", "criterio_c")
         return [
@@ -212,11 +229,11 @@ class MotorCAT:
 
     def obtener_respuestas_previas(self) -> tuple[list[dict], set[int]]:
         """Carga respuestas ya registradas en este intento para esta habilidad."""
-        from evaluacion.models import RespuestaCandidato
+
         registros = RespuestaCandidato.objects.filter(
             compania=self.compania,
             intento=self.intento,
-            pregunta__habilidad=self.habilidad,
+            pregunta__habilidad=self.habilidad_id,
         ).select_related("pregunta", "respuesta")
 
         respuestas_data = []
@@ -233,119 +250,100 @@ class MotorCAT:
 
         return respuestas_data, ids_usados
 
-    def siguiente_pregunta(self) -> Optional[dict]:
-        """
-        Retorna la siguiente pregunta a presentar al candidato,
-        o None si el criterio de parada se cumple.
-        Formato: {id, contenido, opciones: [{id, contenido}]}
-        """
-        from evaluacion.models import Pregunta, Respuesta
+    def siguiente_pregunta(self):
+        respondidas = RespuestaCandidato.objects.filter(
+            compania=self.compania,
+            intento=self.intento
+        ).values_list("pregunta_id", flat=True)
 
-        respuestas_data, ids_usados = self.obtener_respuestas_previas()
-        n_respondidas = len(ids_usados)
+        pregunta = Pregunta.objects.filter(
+            compania=self.compania,
+            habilidad_id=self.habilidad_id,
+            estado=True
+        ).exclude(
+            id__in=respondidas
+        ).first()
 
-        # ── Criterio de parada ──────────────────────────────
-        if n_respondidas >= self.MAX_ITEMS:
+        if not pregunta:
             return None
-
-        if n_respondidas >= self.MIN_ITEMS:
-            theta_actual = estimar_theta(respuestas_data)
-            info_total   = sum(
-                informacion_fisher(theta_actual, r["a"], r["b"], r["c"])
-                for r in respuestas_data
-            )
-            se_actual = error_estandar(info_total)
-            if se_actual <= self.UMBRAL_SE:
-                return None
-
-        # ── Estimar θ actual ────────────────────────────────
-        theta_actual = estimar_theta(respuestas_data) if respuestas_data else 0.0
-
-        # ── Seleccionar ítem ────────────────────────────────
-        items_banco = self.obtener_items_banco()
-        item        = seleccionar_siguiente_item(theta_actual, items_banco, ids_usados)
-
-        if item is None:
-            return None
-
-        # ── Construir respuesta para el frontend ────────────
-        pregunta   = Pregunta.objects.get(id=item["id"])
-        opciones   = Respuesta.objects.filter(pregunta=item["id"]).values("id", "contenido")
 
         return {
-            "pregunta": pregunta.id,
-            "contenido":   pregunta.contenido,
-            "opciones":    list(opciones),
-            "numero":      n_respondidas + 1,
+            "id": pregunta.id,
+            "texto": pregunta.texto,
+            "respuestas": [
+                {
+                    "id": r.id,
+                    "texto": r.texto
+                }
+                for r in pregunta.respuestas.all()
+            ]
         }
 
     @transaction.atomic
     def registrar_respuesta(self, pregunta: int, respuesta: int, tiempo_seg: int) -> dict:
-        """
-        Registra la respuesta del candidato, actualiza θ y el historial.
-        Retorna el estado actualizado del intento.
-        """
-        from evaluacion.models import (
-            RespuestaCandidato, Intento, HistorialHabilidadEstim,
-            Pregunta, Respuesta
-        )
 
-        pregunta  = Pregunta.objects.get(id=pregunta)
-        respuesta = Respuesta.objects.get(id=respuesta)
-        now       = timezone.now()
+        pregunta_obj  = Pregunta.objects.get(id=pregunta)
+        respuesta_obj = Respuesta.objects.get(id=respuesta)
 
-        # ── Guardar respuesta ───────────────────────────────
+        now = timezone.now()
+
         RespuestaCandidato.objects.create(
-            compania      = self.compania,
-            intento       = self.intento,
-            pregunta      = pregunta,
-            respuesta     = respuesta,
-            tiempo_respuesta = tiempo_seg,
-            fecha_respuesta  = now,
-            fecha_creacion   = now,
+            compania=self.compania,
+            intento=self.intento,
+            pregunta=pregunta_obj,
+            respuesta=respuesta_obj,
+            tiempo_respuesta=tiempo_seg,
+            fecha_respuesta=now,
+            fecha_creacion=now,
         )
 
-        # ── Recalcular θ con la nueva respuesta ─────────────
         respuestas_data, ids_usados = self.obtener_respuestas_previas()
-        theta_nuevo  = estimar_theta(respuestas_data)
-        info_total   = sum(
-            informacion_fisher(theta_nuevo, r["a"], r["b"], r["c"])
+
+        theta_nuevo = estimar_theta(respuestas_data)
+
+        info_total = sum(
+            informacion_fisher(
+                theta_nuevo,
+                r["a"],
+                r["b"],
+                r["c"]
+            )
             for r in respuestas_data
         )
-        se_nuevo = error_estandar(info_total)
-        paso     = len(ids_usados)
 
-        # ── Registrar historial paso a paso ─────────────────
+        se_nuevo = error_estandar(info_total)
+
+        paso = len(ids_usados)
+
         HistorialHabilidadEstim.objects.create(
-            compania     = self.compania,
-            intento      = self.intento,
-            habilidad_estim = theta_nuevo,
-            error_estandar  = se_nuevo,
-            paso            = paso,
-            fecha_creacion  = now,
+            compania=self.compania,
+            intento=self.intento,
+            habilidad_estim=theta_nuevo,
+            error_estandar=se_nuevo,
+            paso=paso,
+            fecha_creacion=now,
         )
 
-        # ── Actualizar intento ──────────────────────────────
         Intento.objects.filter(
-            compania=self.compania, id=self.intento
+            compania=self.compania,
+            id=self.intento_id
         ).update(
-            habilidad_estim  = theta_nuevo,
-            error_estandar   = se_nuevo,
-            fecha_modificacion = now,
+            habilidad_estim=theta_nuevo,
+            error_estandar=se_nuevo,
+            fecha_modificacion=now,
         )
 
         return {
-            "theta":          theta_nuevo,
+            "theta": theta_nuevo,
             "error_estandar": se_nuevo,
-            "paso":           paso,
-            "correcto":       respuesta.ind_correcta,
+            "paso": paso,
+            "correcto": respuesta_obj.ind_correcta,
         }
 
     def finalizar(self) -> dict:
         """
         Finaliza el intento: marca como COMPLETADO y retorna el resultado final.
         """
-        from evaluacion.models import Intento, EstadoIntento
 
         estado_completado = EstadoIntento.objects.get(descripcion="Completado")
         intento = Intento.objects.get(compania=self.compania, id=self.intento)

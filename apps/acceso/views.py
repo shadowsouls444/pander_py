@@ -1,247 +1,321 @@
+"""
+apps/acceso/views.py — versión definitiva v4
+"""
+import hashlib, secrets, string
+from datetime import timedelta
+
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from django.core.mail import send_mail
+from django.conf import settings
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
 from .models import Rol, Modulo, RolModulo, Analista, Usuario
 from .serializers import (
     RolSerializer, ModuloSerializer, RolModuloSerializer,
     AnalistaSerializer, UsuarioSerializer,
 )
 
-class RolList(APIView):
-    """
-    GET  /api/roles/  → lista todos los roles
-    POST /api/roles/  → crea un rol
-    """
- 
-    def get(self, request):
-        roles = Rol.objects.all()
-        serializer = RolSerializer(roles, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
- 
+# ══════════════════════════════════════════════════════════════
+# UTILIDADES
+# ══════════════════════════════════════════════════════════════
+
+def _hash(raw): return hashlib.sha256(raw.encode()).hexdigest()
+
+def _gen_pwd(n=12):
+    chars = string.ascii_letters + string.digits + "@#$%&*"
+    pwd = [secrets.choice(string.ascii_uppercase),
+           secrets.choice(string.ascii_lowercase),
+           secrets.choice(string.digits),
+           secrets.choice("@#$%&*")]
+    pwd += [secrets.choice(chars) for _ in range(n - 4)]
+    secrets.SystemRandom().shuffle(pwd)
+    return "".join(pwd)
+
+def _gen_login(primer_nombre, primer_apellido):
+    base = (primer_nombre[0] + primer_apellido).lower()
+    base = "".join(c for c in base if c.isalnum())
+    n = Usuario.objects.filter(login__startswith=base).count()
+    return f"{base}{n+1:03d}"
+
+def _modulos_sesion(rol_id, es_super):
+    if es_super:
+        qs = Modulo.objects.filter(ind_visible=True).order_by("orden")
+    else:
+        ids = RolModulo.objects.filter(rol_id=rol_id).values_list("modulo_id", flat=True)
+        qs  = Modulo.objects.filter(id__in=ids, ind_visible=True).order_by("orden")
+    return [{"id": m.id, "descripcion": m.descripcion,
+             "nombre_aplicacion": m.nombre_aplicacion,
+             "icono": m.icono or "", "orden": m.orden,
+             "modulo_padre": m.modulo_padre_id} for m in qs]
+
+def _sesion(usuario):
+    """Construye el dict de sesión completo."""
+    nombre = usuario.login
+    if usuario.analista_id:
+        try:
+            a = Analista.objects.get(id=usuario.analista_id)
+            nombre = f"{a.primer_nombre} {a.primer_apellido}".strip()
+        except Analista.DoesNotExist:
+            pass
+    rol_desc = ""
+    try: rol_desc = Rol.objects.get(id=usuario.rol_id).descripcion
+    except Rol.DoesNotExist: pass
+    from apps.empresa.models import Compania
+    comp_nombre = ""
+    try: comp_nombre = Compania.objects.get(id=usuario.compania_id).descripcion
+    except Exception: pass
+    return {
+        "id": usuario.id, "compania": usuario.compania_id,
+        "compania_nombre": comp_nombre, "login": usuario.login,
+        "email": usuario.email, "rol": usuario.rol_id,
+        "rol_descripcion": rol_desc,
+        "ind_super_usuario": usuario.ind_super_usuario,
+        "nombre": nombre,
+        "modulos": _modulos_sesion(usuario.rol_id, usuario.ind_super_usuario),
+    }
+
+# ══════════════════════════════════════════════════════════════
+# AUTH
+# ══════════════════════════════════════════════════════════════
+_reset_tokens: dict = {}
+
+class LoginView(APIView):
     def post(self, request):
-        serializer = RolSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
- 
- 
+        login_val = (request.data.get("login") or "").strip().lower()
+        pwd_raw   = request.data.get("pwd") or ""
+        compania  = request.data.get("compania", 1)
+        if not login_val or not pwd_raw:
+            return Response({"detail": "Login y contraseña son obligatorios."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        u = Usuario.objects.filter(compania=compania, login__iexact=login_val).first()
+        if not u:
+            u = Usuario.objects.filter(login__iexact=login_val, ind_super_usuario=True).first()
+        if not u or u.pwd != _hash(pwd_raw):
+            return Response({"detail": "Credenciales incorrectas."}, status=status.HTTP_401_UNAUTHORIZED)
+        if not u.ind_activo:
+            return Response({"detail": "Cuenta inactiva."}, status=status.HTTP_403_FORBIDDEN)
+        if u.ind_bloqueo:
+            return Response({"detail": "Cuenta bloqueada."}, status=status.HTTP_403_FORBIDDEN)
+        return Response(_sesion(u), status=status.HTTP_200_OK)
+
+
+class CambiarCompaniaView(APIView):
+    """POST /api/acceso/auth/cambiar-compania/ — solo superusuarios."""
+    def post(self, request):
+        uid = request.data.get("usuario_id")
+        cid = request.data.get("compania_id")
+        if not uid or not cid:
+            return Response({"detail": "usuario_id y compania_id son obligatorios."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        u = get_object_or_404(Usuario, id=uid)
+        if not u.ind_super_usuario:
+            return Response({"detail": "Solo superusuarios."}, status=status.HTTP_403_FORBIDDEN)
+        from apps.empresa.models import Compania
+        get_object_or_404(Compania, id=cid)
+        # Actualizar compania en memoria del objeto para construir sesión
+        u.compania_id = int(cid)
+        return Response(_sesion(u), status=status.HTTP_200_OK)
+
+
+class CompaniasSuperusuarioView(APIView):
+    """GET /api/acceso/auth/mis-companias/?usuario_id=1&q=texto"""
+    def get(self, request):
+        uid = request.query_params.get("usuario_id")
+        q   = request.query_params.get("q", "").strip()
+        u   = get_object_or_404(Usuario, id=uid)
+        if not u.ind_super_usuario:
+            return Response({"detail": "Solo superusuarios."}, status=status.HTTP_403_FORBIDDEN)
+        from apps.empresa.models import Compania
+        qs = Compania.objects.filter(ind_activa=True)
+        if q: qs = qs.filter(descripcion__icontains=q)
+        return Response([{"id": c.id, "descripcion": c.descripcion, "nit": c.nit} for c in qs])
+
+
+class ResetPasswordRequestView(APIView):
+    def post(self, request):
+        email = (request.data.get("email") or "").strip().lower()
+        if not email:
+            return Response({"detail": "El correo es obligatorio."}, status=status.HTTP_400_BAD_REQUEST)
+        try: u = Usuario.objects.get(email__iexact=email, ind_activo=True)
+        except Usuario.DoesNotExist:
+            return Response({"detail": "Si el correo está registrado, recibirás las instrucciones."})
+        otp = f"{secrets.randbelow(1_000_000):06d}"
+        for k, v in list(_reset_tokens.items()):
+            if v["usuario_id"] == u.id: del _reset_tokens[k]
+        _reset_tokens[otp] = {"usuario_id": u.id, "expira": timezone.now() + timedelta(minutes=15)}
+        try:
+            send_mail("Pander RRHH — Código de recuperación",
+                f"Hola {u.login},\n\nTu código OTP es: {otp}\n\nVálido 15 minutos.\n\nPander RRHH",
+                settings.DEFAULT_FROM_EMAIL, [u.email], fail_silently=False)
+        except Exception as e:
+            return Response({"detail": f"Error al enviar correo: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"detail": "Si el correo está registrado, recibirás las instrucciones."})
+
+
+class ResetPasswordConfirmView(APIView):
+    def post(self, request):
+        otp  = (request.data.get("otp") or "").strip()
+        npwd = request.data.get("nueva_pwd") or ""
+        if not otp or len(npwd) < 8:
+            return Response({"detail": "Código y contraseña (min 8) son obligatorios."}, status=400)
+        td = _reset_tokens.get(otp)
+        if not td: return Response({"detail": "Código inválido."}, status=400)
+        if timezone.now() > td["expira"]:
+            del _reset_tokens[otp]; return Response({"detail": "Código expirado."}, status=400)
+        u = get_object_or_404(Usuario, id=td["usuario_id"])
+        u.pwd = _hash(npwd); u.save(update_fields=["pwd"])
+        del _reset_tokens[otp]
+        return Response({"detail": "Contraseña actualizada."})
+
+# ══════════════════════════════════════════════════════════════
+# CRUD
+# ══════════════════════════════════════════════════════════════
+
+class RolList(APIView):
+    def get(self, request):
+        return Response(RolSerializer(Rol.objects.all(), many=True).data)
+    def post(self, request):
+        s = RolSerializer(data=request.data)
+        if s.is_valid(): s.save(); return Response(s.data, status=201)
+        return Response(s.errors, status=400)
+
 class RolDetail(APIView):
-    """
-    GET    /api/roles/{id}/
-    PUT    /api/roles/{id}/
-    DELETE /api/roles/{id}/
-    """
- 
-    def get(self, request, id):
-        rol = get_object_or_404(Rol, id=id)
-        return Response(RolSerializer(rol).data, status=status.HTTP_200_OK)
- 
+    def get(self, request, id): return Response(RolSerializer(get_object_or_404(Rol,id=id)).data)
     def put(self, request, id):
-        rol = get_object_or_404(Rol, id=id)
-        serializer = RolSerializer(rol, data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
- 
+        d = request.data.copy(); d["usuario_modificacion"] = d.get("usuario_modificacion")
+        s = RolSerializer(get_object_or_404(Rol,id=id), data=d)
+        if s.is_valid(): s.save(); return Response(s.data)
+        return Response(s.errors, status=400)
     def delete(self, request, id):
-        get_object_or_404(Rol, id=id).delete()
-        return Response(
-            {"message": "Rol eliminado correctamente"},
-            status=status.HTTP_200_OK,
-        )
- 
+        get_object_or_404(Rol,id=id).delete(); return Response({"message":"Eliminado."})
 
 class ModuloList(APIView):
-    """
-    GET  /api/modulos/  → lista todos los módulos
-    POST /api/modulos/  → crea un módulo
-    """
- 
     def get(self, request):
-        modulos = Modulo.objects.all()
-        serializer = ModuloSerializer(modulos, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
- 
+        return Response(ModuloSerializer(Modulo.objects.all().order_by("orden"), many=True).data)
     def post(self, request):
-        serializer = ModuloSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
- 
- 
+        s = ModuloSerializer(data=request.data)
+        if s.is_valid(): s.save(); return Response(s.data, status=201)
+        return Response(s.errors, status=400)
+
 class ModuloDetail(APIView):
-    """
-    GET    /api/modulos/{id}/
-    PUT    /api/modulos/{id}/
-    DELETE /api/modulos/{id}/
-    """
- 
-    def get(self, request, id):
-        modulo = get_object_or_404(Modulo, id=id)
-        return Response(ModuloSerializer(modulo).data, status=status.HTTP_200_OK)
- 
+    def get(self, request, id): return Response(ModuloSerializer(get_object_or_404(Modulo,id=id)).data)
     def put(self, request, id):
-        modulo = get_object_or_404(Modulo, id=id)
-        serializer = ModuloSerializer(modulo, data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
- 
+        d = request.data.copy(); d["usuario_modificacion"] = d.get("usuario_modificacion")
+        s = ModuloSerializer(get_object_or_404(Modulo,id=id), data=d)
+        if s.is_valid(): s.save(); return Response(s.data)
+        return Response(s.errors, status=400)
     def delete(self, request, id):
-        get_object_or_404(Modulo, id=id).delete()
-        return Response(
-            {"message": "Módulo eliminado correctamente"},
-            status=status.HTTP_200_OK,
-        )
- 
+        get_object_or_404(Modulo,id=id).delete(); return Response({"message":"Eliminado."})
 
 class RolModuloList(APIView):
-    """
-    GET  /api/roles/{rol}/modulos/  → módulos asignados a un rol
-    POST /api/roles/{rol}/modulos/  → asigna un módulo a un rol
-    """
- 
     def get(self, request, rol):
-        get_object_or_404(Rol, id=rol)
-        relaciones = RolModulo.objects.filter(rol=rol)
-        serializer = RolModuloSerializer(relaciones, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
- 
+        return Response(RolModuloSerializer(RolModulo.objects.filter(rol=rol), many=True).data)
     def post(self, request, rol):
         get_object_or_404(Rol, id=rol)
-        data = request.data.copy()
-        data["rol"] = rol
-        serializer = RolModuloSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
- 
- 
+        d = request.data.copy(); d["rol"] = rol
+        s = RolModuloSerializer(data=d)
+        if s.is_valid(): s.save(); return Response(s.data, status=201)
+        return Response(s.errors, status=400)
+
 class RolModuloDetail(APIView):
-    """
-    DELETE /api/roles/{rol}/modulos/{id}/  → desasigna un módulo de un rol
-    """
- 
     def delete(self, request, rol, id):
-        relacion = get_object_or_404(RolModulo, id=id, rol=rol)
-        relacion.delete()
-        return Response(
-            {"message": "Módulo desasignado del rol correctamente"},
-            status=status.HTTP_200_OK,
-        )
- 
+        get_object_or_404(RolModulo,id=id,rol=rol).delete()
+        return Response({"message":"Desasignado."})
+
 class AnalistaList(APIView):
-    """
-    GET  /api/companias/{compania}/analistas/
-    POST /api/companias/{compania}/analistas/
-    """
- 
     def get(self, request, compania):
-        analistas = Analista.objects.filter(compania=compania)
-        serializer = AnalistaSerializer(analistas, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
- 
+        return Response(AnalistaSerializer(Analista.objects.filter(compania=compania), many=True).data)
     def post(self, request, compania):
-        data = request.data.copy()
-        data["compania"] = compania
-        serializer = AnalistaSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
- 
- 
+        d = request.data.copy(); d["compania"] = compania
+        s = AnalistaSerializer(data=d)
+        if s.is_valid(): s.save(); return Response(s.data, status=201)
+        return Response(s.errors, status=400)
+
 class AnalistaDetail(APIView):
-    """
-    GET    /api/companias/{compania}/analistas/{id}/
-    PUT    /api/companias/{compania}/analistas/{id}/
-    DELETE /api/companias/{compania}/analistas/{id}/
-    """
- 
-    def _get(self, compania, id):
-        return get_object_or_404(Analista, id=id, compania=compania)
- 
-    def get(self, request, compania, id):
-        return Response(
-            AnalistaSerializer(self._get(compania, id)).data,
-            status=status.HTTP_200_OK,
-        )
- 
+    def _get(self, c, id): return get_object_or_404(Analista, id=id, compania=c)
+    def get(self, request, compania, id): return Response(AnalistaSerializer(self._get(compania,id)).data)
     def put(self, request, compania, id):
-        analista = self._get(compania, id)
-        data = request.data.copy()
-        data["compania"] = compania
-        serializer = AnalistaSerializer(analista, data=data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
- 
+        a = self._get(compania, id); d = request.data.copy()
+        d["compania"] = compania; d["usuario_modificacion"] = d.get("usuario_modificacion")
+        s = AnalistaSerializer(a, data=d)
+        if s.is_valid(): s.save(); return Response(s.data)
+        return Response(s.errors, status=400)
     def delete(self, request, compania, id):
-        self._get(compania, id).delete()
-        return Response(
-            {"message": "Analista eliminado correctamente"},
-            status=status.HTTP_200_OK,
-        )
- 
- 
+        self._get(compania, id).delete(); return Response({"message":"Eliminado."})
+
+
 class UsuarioList(APIView):
-    """
-    GET  /api/companias/{compania}/usuarios/
-    POST /api/companias/{compania}/usuarios/
-    """
- 
     def get(self, request, compania):
-        usuarios = Usuario.objects.filter(compania=compania)
-        serializer = UsuarioSerializer(usuarios, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
- 
+        return Response(UsuarioSerializer(Usuario.objects.filter(compania=compania), many=True).data)
+
     def post(self, request, compania):
-        data = request.data.copy()
-        data["compania"] = compania
-        serializer = UsuarioSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
- 
- 
+        d = request.data.copy(); d["compania"] = compania
+        d["id_interno"] = Usuario.objects.filter(compania=compania).count() + 1
+
+        # Obtener nombre del analista
+        pnombre, papellido = "usuario", "pander"
+        analista_id = d.get("analista")
+        if analista_id:
+            try:
+                a = Analista.objects.get(id=analista_id)
+                pnombre, papellido = a.primer_nombre, a.primer_apellido
+            except Analista.DoesNotExist: pass
+
+        # Login automático si vacío
+        if not str(d.get("login","")).strip():
+            d["login"] = _gen_login(pnombre, papellido)
+
+        # Contraseña automática si vacía
+        pwd_plano = str(d.get("pwd","")).strip() or None
+        if not pwd_plano:
+            pwd_plano = _gen_pwd()
+        d["pwd"] = _hash(pwd_plano)
+
+        s = UsuarioSerializer(data=d)
+        if not s.is_valid(): return Response(s.errors, status=400)
+        u = s.save()
+
+        # Enviar correo
+        correo_enviado = False
+        email_dest = d.get("email")
+        if email_dest:
+            try:
+                from apps.empresa.models import Compania as C
+                comp_nombre = ""
+                try: comp_nombre = C.objects.get(id=compania).descripcion
+                except Exception: pass
+                fe = getattr(settings, "FRONTEND_URL", "http://localhost:5173")
+                send_mail(
+                    "Pander RRHH — Bienvenido al sistema",
+                    (f"Hola {pnombre} {papellido},\n\n"
+                     f"Tu cuenta en Pander RRHH ha sido creada.\n\n"
+                     f"Compañía: {comp_nombre}\n"
+                     f"Usuario:   {d['login']}\n"
+                     f"Contraseña: {pwd_plano}\n\n"
+                     f"Plataforma: {fe}\n\n"
+                     f"Por seguridad, cambia tu contraseña al ingresar.\n\n"
+                     f"Equipo Pander RRHH"),
+                    settings.DEFAULT_FROM_EMAIL, [email_dest], fail_silently=True)
+                correo_enviado = True
+            except Exception: pass
+
+        return Response({**s.data, "login_generado": d["login"],
+                         "correo_enviado": correo_enviado}, status=201)
+
+
 class UsuarioDetail(APIView):
-    """
-    GET    /api/companias/{compania}/usuarios/{id}/
-    PUT    /api/companias/{compania}/usuarios/{id}/
-    DELETE /api/companias/{compania}/usuarios/{id}/
-    """
- 
-    def _get(self, compania, id):
-        return get_object_or_404(Usuario, id=id, compania=compania)
- 
-    def get(self, request, compania, id):
-        return Response(
-            UsuarioSerializer(self._get(compania, id)).data,
-            status=status.HTTP_200_OK,
-        )
- 
+    def _get(self, c, id): return get_object_or_404(Usuario, id=id, compania=c)
+    def get(self, request, compania, id): return Response(UsuarioSerializer(self._get(compania,id)).data)
     def put(self, request, compania, id):
-        usuario = self._get(compania, id)
-        data = request.data.copy()
-        data["compania"] = compania
-        serializer = UsuarioSerializer(usuario, data=data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
- 
+        u = self._get(compania, id); d = request.data.copy()
+        d["compania"] = compania
+        # usuario_modificacion SIEMPRE en PUT
+        d["usuario_modificacion"] = d.get("usuario_modificacion") or d.get("usuario_id")
+        s = UsuarioSerializer(u, data=d)
+        if s.is_valid(): s.save(); return Response(s.data)
+        return Response(s.errors, status=400)
     def delete(self, request, compania, id):
-        self._get(compania, id).delete()
-        return Response(
-            {"message": "Usuario eliminado correctamente"},
-            status=status.HTTP_200_OK,
-        )
- 
+        self._get(compania, id).delete(); return Response({"message":"Eliminado."})

@@ -1,26 +1,11 @@
 """
-candidatos/views_models.py
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Modelos de SOLO LECTURA — vistas SQL del módulo candidatos.
-managed = False → nunca incluidos en migraciones.
-
-USO:
-  from candidatos.views_models import (
-      VCandidato, VPostulacion, VAnexoCandidato
-  )
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+candidatos/models_vistas_sql.py
+Agrega VReportePostulacion que faltaba (causaba ImportError).
 """
-
 from django.db import models
 
 
 class VCandidato(models.Model):
-    """
-    Vista v_candidato.
-    La vista SQL expone:
-      ca.compania      AS compania_id
-      dc.tipo_documento AS tipo_documento_id
-    """
     compania_id                = models.IntegerField()
     compania_descripcion       = models.CharField(max_length=255)
     id_interno                 = models.IntegerField()
@@ -45,14 +30,6 @@ class VCandidato(models.Model):
 
 
 class VPostulacion(models.Model):
-    """
-    Vista v_postulacion.
-    La vista SQL expone:
-      p.compania  AS compania_id
-      p.vacante   AS vacante_id
-      p.candidato AS candidato_id
-      p.estado    AS estado_id
-    """
     compania_id               = models.IntegerField()
     compania_descripcion      = models.CharField(max_length=255)
     id_interno                = models.IntegerField()
@@ -78,12 +55,6 @@ class VPostulacion(models.Model):
 
 
 class VAnexoCandidato(models.Model):
-    """
-    Vista v_anexo_candidato.
-    La vista SQL expone:
-      anx.compania  AS compania_id
-      anx.candidato AS candidato_id
-    """
     compania_id          = models.IntegerField()
     compania_descripcion = models.CharField(max_length=255)
     candidato_id         = models.IntegerField()
@@ -101,3 +72,32 @@ class VAnexoCandidato(models.Model):
     class Meta:
         managed  = False
         db_table = "v_anexo_candidato"
+
+
+class VReportePostulacion(models.Model):
+    """
+    Vista v_reporte_postulacion — incluye columna id (ROW_NUMBER) añadida en 0005.
+    """
+    compania_id               = models.IntegerField()
+    compania                  = models.CharField(max_length=255)
+    postulacion_id            = models.IntegerField()
+    fecha_postulacion         = models.DateTimeField()
+    vacante_id                = models.IntegerField()
+    vacante                   = models.TextField()
+    unidad                    = models.CharField(max_length=255)
+    candidato_nombre_completo = models.CharField(max_length=400, null=True)
+    candidato_documento       = models.CharField(max_length=30, null=True)
+    candidato_email           = models.EmailField(max_length=150, null=True)
+    candidato_telefono        = models.CharField(max_length=20, null=True)
+    estado_postulacion        = models.CharField(max_length=100)
+    theta_final               = models.FloatField(null=True)
+    error_estandar_final      = models.FloatField(null=True)
+    estado_intento            = models.CharField(max_length=100, null=True)
+    intento_inicio            = models.DateTimeField(null=True)
+    intento_fin               = models.DateTimeField(null=True)
+    duracion_minutos          = models.IntegerField(null=True)
+    decision                  = models.CharField(max_length=20)
+
+    class Meta:
+        managed  = False
+        db_table = "v_reporte_postulacion"
