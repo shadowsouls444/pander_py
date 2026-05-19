@@ -88,6 +88,27 @@ def insertar_modulos(apps, schema_editor):
             "orden":           9,
             "ind_visible":     True,
         },
+        {
+            "descripcion":     "Configuración Evaluaciones",
+            "nombre_aplicacion": "/gestion-evaluaciones",
+            "icono":           "",
+            "orden":           10,
+            "ind_visible":     True,
+        },
+        {
+            "descripcion":     "Configuración Roles",
+            "nombre_aplicacion": "/gestion-roles",
+            "icono":           "",
+            "orden":           11,
+            "ind_visible":     True,
+        },
+        {
+            "descripcion":     "Gestión Unidades",
+            "nombre_aplicacion": "/gestion-unidades",
+            "icono":           "📊",
+            "orden":           12,
+            "ind_visible":     True,
+        },
     ]
 
     # ── Módulos de API (ocultos en menú, para control de acceso) ──

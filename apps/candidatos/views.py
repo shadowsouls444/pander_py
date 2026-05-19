@@ -288,3 +288,155 @@ class VPostulacionListView(APIView):
         n = request.query_params.get("candidato_nombre")
         if n: qs = qs.filter(candidato_nombre_completo__icontains=n)
         return Response(VPostulacionSerializer(qs, many=True).data)
+
+class DecisionView(APIView):
+    """
+    POST /api/candidatos/companias/<compania>/postulaciones/<id>/decision/
+    Body: {
+        estado_id:            int   (id del EstadoPostulacion: Seleccionado o Descartado)
+        observaciones:        str   (justificación del analista)
+        usuario_modificacion: int
+    }
+    Actualiza SOLO estado + descripcion en la tabla postulacion.
+    Envía correo al candidato con la decisión y la justificación.
+    """
+    def post(self, request, compania, id):
+        from django.shortcuts import get_object_or_404
+        from django.conf import settings
+        from django.core.mail import send_mail
+        from django.utils import timezone
+        from .models import Postulacion, EstadoPostulacion, DatosCandidato
+
+        post = get_object_or_404(Postulacion, id=id, compania=compania)
+
+        # Validar que no esté ya finalizada
+        if post.estado and post.estado.descripcion == "Finalizado":
+            return Response(
+                {"detail": "Esta postulación ya está finalizada y no puede modificarse."},
+                status=400
+            )
+
+        estado_id     = request.data.get("estado_id")
+        observaciones = (request.data.get("observaciones") or "").strip()
+        uid_mod       = request.data.get("usuario_modificacion")
+
+        if not estado_id:
+            return Response({"detail": "El campo estado_id es obligatorio."}, status=400)
+
+        nuevo_estado = get_object_or_404(EstadoPostulacion, id=estado_id)
+
+        # Validar que la decisión sea Seleccionado o Descartado
+        estados_validos = {"Seleccionado", "Descartado"}
+        if nuevo_estado.descripcion not in estados_validos:
+            return Response(
+                {"detail": f"Para toma de decisión solo se permiten: {', '.join(estados_validos)}."},
+                status=400
+            )
+
+        estado_anterior_desc = post.estado.descripcion if post.estado else "—"
+        estado_nuevo_desc    = nuevo_estado.descripcion
+
+        # Actualizar solo los campos necesarios (sin romper unique_together)
+        Postulacion.objects.filter(id=id, compania=compania).update(
+            estado               = nuevo_estado,
+            descripcion          = observaciones or post.descripcion,
+            usuario_modificacion = uid_mod,
+            fecha_modificacion   = timezone.now(),
+        )
+
+        # Enviar correo al candidato
+        correo_enviado = False
+        try:
+            dc = DatosCandidato.objects.get(candidato=post.candidato_id)
+            if dc.email:
+                nombre  = f"{dc.primer_nombre} {dc.primer_apellido}".strip()
+                vacante = str(post.vacante)[:80]
+                icono   = "✅" if estado_nuevo_desc == "Seleccionado" else "❌"
+                fe_url  = getattr(settings, "FRONTEND_URL", "http://localhost:5173")
+
+                linea_obs = (
+                    f"\nObservaciones del analista:\n  {observaciones}\n"
+                    if observaciones else ""
+                )
+
+                send_mail(
+                    subject=f"Pander RRHH — {icono} Decisión sobre tu postulación",
+                    message=(
+                        f"Hola {nombre},\n\n"
+                        f"El equipo de RRHH ha tomado una decisión sobre tu postulación.\n\n"
+                        f"Vacante:         {vacante}\n"
+                        f"Estado anterior: {estado_anterior_desc}\n"
+                        f"Nuevo estado:    {estado_nuevo_desc}\n"
+                        f"{linea_obs}\n"
+                        f"Si tienes preguntas, comunícate con el área de RRHH.\n\n"
+                        f"Plataforma: {fe_url}\n\n"
+                        f"Equipo Pander RRHH"
+                    ),
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[dc.email],
+                    fail_silently=True,
+                )
+                correo_enviado = True
+        except Exception:
+            pass
+
+        # Recargar para devolver estado actualizado
+        post.refresh_from_db()
+
+        return Response({
+            "id":             post.id,
+            "estado_id":      post.estado_id,
+            "estado":         post.estado.descripcion,
+            "observaciones":  post.descripcion,
+            "correo_enviado": correo_enviado,
+            "message": (
+                f"Decisión '{estado_nuevo_desc}' registrada."
+                + (" Correo enviado al candidato." if correo_enviado else " Correo no enviado (revisar SMTP).")
+            ),
+        })
+
+
+class FinalizarPostulacionView(APIView):
+    """
+    POST /api/candidatos/companias/<compania>/postulaciones/<id>/finalizar/
+    Body: { usuario_modificacion: int }
+
+    Finaliza la postulación (solo si hay decisión previa: Seleccionado o Descartado).
+    Una vez finalizada no se puede editar.
+    """
+    def post(self, request, compania, id):
+        from django.shortcuts import get_object_or_404
+        from django.utils import timezone
+        from .models import Postulacion, EstadoPostulacion
+
+        post = get_object_or_404(Postulacion, id=id, compania=compania)
+
+        # Ya finalizada
+        if post.estado and post.estado.descripcion == "Finalizado":
+            return Response({"detail": "Ya está finalizada."}, status=400)
+
+        # Solo se puede finalizar si hay decisión previa
+        estados_con_decision = {"Seleccionado", "Descartado"}
+        if not post.estado or post.estado.descripcion not in estados_con_decision:
+            return Response(
+                {"detail": "Solo se puede finalizar una postulación con decisión previa (Seleccionado o Descartado)."},
+                status=400
+            )
+
+        estado_finalizado = EstadoPostulacion.objects.filter(descripcion="Finalizado").first()
+        if not estado_finalizado:
+            return Response({"detail": "Estado 'Finalizado' no encontrado en la tabla estado_postulacion."}, status=400)
+
+        uid_mod = request.data.get("usuario_modificacion")
+
+        Postulacion.objects.filter(id=id, compania=compania).update(
+            estado               = estado_finalizado,
+            usuario_modificacion = uid_mod,
+            fecha_modificacion   = timezone.now(),
+        )
+
+        return Response({
+            "id":      post.id,
+            "estado":  "Finalizado",
+            "message": "Postulación finalizada. No se permiten ediciones posteriores.",
+        })

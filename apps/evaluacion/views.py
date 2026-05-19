@@ -274,6 +274,7 @@ class AccesoEvaluacionView(APIView):
                     "pregunta":               siguiente,
                     "token_valido":           True,
                     "evaluacion_descripcion": intento.evaluacion.descripcion,
+                    "total_preguntas":        len(habilidades) * MotorCAT.MAX_ITEMS,
                 })
 
         # Todas completadas → finalizar

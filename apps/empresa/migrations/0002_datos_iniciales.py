@@ -70,7 +70,7 @@ def insertar_datos_iniciales(apps, schema_editor):
         compania=compania, id_interno=1,
         analista=analista, rol=rol_manager,
         login="admin", pwd=hash_pwd("Admin1234*"),
-        email="admin@pander.com",
+        email="johan.ramirez.beltran@gmail.com",
         ind_super_usuario=True, ind_activo=True, ind_bloqueo=False,
         usuario_creacion=1, fecha_creacion=now,
     )
