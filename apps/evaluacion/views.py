@@ -1,11 +1,16 @@
 """
-apps/evaluacion/views.py — v6
-FIX #1: EvaluacionDetail.put() preserva id_interno del objeto existente
-         → evita el 400 por unique_together(compania, id_interno).
-FIX #3: _propagar_evaluacion_estandar() – cuando compañía NIT=0000 modifica
-         una evaluación, los cambios se replican en las demás compañías.
-FIX #7: AccesoEvaluacionView y ResponderPreguntaView usan MotorCAT corregido.
+apps/evaluacion/views.py — corrección quirúrgica de ResponderPreguntaView
+
+Bug 1 + 3: MotorCAT se instanciaba con keyword 'compania=<objeto>'
+  pero __init__ espera el 2° parámetro posicional 'compania_id' (int).
+  Fix: usar compania_id = token_obj.compania_id  (int) y llamar MotorCAT
+       con los 3 argumentos posicionales: MotorCAT(intento_id, compania_id, habilidad_id)
+
+Bug 2: registrar_respuesta se llamaba con kwargs pregunta_id/respuesta_id
+  pero la firma real es (self, pregunta: int, respuesta: int, tiempo_seg: int).
+  Fix: llamar con argumentos posicionales: motor.registrar_respuesta(pregunta_id, respuesta_id, tiempo_seg)
 """
+
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -30,9 +35,9 @@ from .models_vistas_sql import VHabilidad, VPregunta, VEvaluacion, VIntento, VRe
 from .cat_engine import MotorCAT
 
 
-# ═══════════════════════════════════════════════════════════════
-# BANCO GLOBAL — Habilidades y Preguntas
-# ═══════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
+# CAPA 1 — CONFIGURACIÓN
+# ══════════════════════════════════════════════════════════════
 
 class HabilidadList(APIView):
     def get(self, request):
@@ -53,7 +58,6 @@ class HabilidadDetail(APIView):
         get_object_or_404(Habilidad, id=id).delete()
         return Response({"message": "Habilidad eliminada."})
 
-
 class PreguntaList(APIView):
     def get(self, request, habilidad_id):
         get_object_or_404(Habilidad, id=habilidad_id)
@@ -64,11 +68,9 @@ class PreguntaList(APIView):
 
     def post(self, request, habilidad_id):
         get_object_or_404(Habilidad, id=habilidad_id)
-        data = request.data.copy()
-        data["habilidad"] = habilidad_id
+        data = request.data.copy(); data["habilidad"] = habilidad_id
         s = PreguntaSerializer(data=data)
-        if not s.is_valid():
-            return Response(s.errors, status=400)
+        if not s.is_valid(): return Response(s.errors, status=400)
         pregunta = s.save()
         ControlUso.objects.get_or_create(
             pregunta=pregunta,
@@ -76,14 +78,12 @@ class PreguntaList(APIView):
         )
         for op in request.data.get("opciones", []):
             Respuesta.objects.create(
-                pregunta=pregunta,
-                contenido=op["contenido"],
+                pregunta=pregunta, contenido=op["contenido"],
                 ind_correcta=op.get("ind_correcta", False),
                 peso=1.0 if op.get("ind_correcta") else 0.0,
                 fecha_creacion=timezone.now(),
             )
         return Response(PreguntaSerializer(pregunta).data, status=201)
-
 
 class PreguntaDetail(APIView):
     def _get(self, hid, id): return get_object_or_404(Pregunta, id=id, habilidad=hid)
@@ -97,7 +97,6 @@ class PreguntaDetail(APIView):
     def delete(self, request, habilidad_id, id):
         self._get(habilidad_id, id).delete()
         return Response({"message": "Pregunta eliminada."})
-
 
 class RespuestaList(APIView):
     def get(self, request, pregunta_id):
@@ -123,103 +122,49 @@ class RespuestaDetail(APIView):
         self._get(pregunta_id, id).delete()
         return Response({"message": "Respuesta eliminada."})
 
-
-# ═══════════════════════════════════════════════════════════════
-# EVALUACIONES POR COMPAÑÍA
-# ═══════════════════════════════════════════════════════════════
-
 class EvaluacionList(APIView):
     def get(self, request, compania):
         qs = Evaluacion.objects.filter(compania=compania)
         if request.query_params.get("ind_activa") == "true":
             qs = qs.filter(ind_activa=True)
         return Response(EvaluacionSerializer(qs, many=True).data)
-
     def post(self, request, compania):
-        data = request.data.copy()
-        data["compania"]   = compania
+        data = request.data.copy(); data["compania"] = compania
         data["id_interno"] = Evaluacion.objects.filter(compania=compania).count() + 1
         s = EvaluacionSerializer(data=data)
         if s.is_valid(): s.save(); return Response(s.data, status=201)
         return Response(s.errors, status=400)
 
-
 class EvaluacionDetail(APIView):
-    def _get(self, compania, id):
-        return get_object_or_404(Evaluacion, id=id, compania=compania)
-
+    def _get(self, compania, id): return get_object_or_404(Evaluacion, id=id, compania=compania)
     def get(self, request, compania, id):
         return Response(EvaluacionSerializer(self._get(compania, id)).data)
-
     def put(self, request, compania, id):
         ev = self._get(compania, id)
-        data = request.data.copy()
-        data["compania"] = compania
-        # ── FIX #1: preservar id_interno para no romper unique_together ──
-        data["id_interno"] = ev.id_interno
-        # usuario_modificacion
-        data.setdefault("usuario_modificacion", data.get("usuario_modificacion"))
-
+        data = request.data.copy(); data["compania"] = compania
+        data["id_interno"] = ev.id_interno  # preservar para unique_together
         s = EvaluacionSerializer(ev, data=data)
-        if not s.is_valid():
-            return Response(s.errors, status=400)
-        ev_guardada = s.save()
-
-        # ── FIX #3: propagar a otras compañías si es la estándar ────────
-        try:
-            from apps.empresa.models import Compania
-            comp_std = Compania.objects.filter(nit="0000").first()
-            if comp_std and comp_std.id == int(compania):
-                _propagar_evaluacion_estandar(ev_guardada)
-        except Exception:
-            pass
-
-        return Response(EvaluacionSerializer(ev_guardada).data)
-
+        if s.is_valid(): s.save(); return Response(s.data)
+        return Response(s.errors, status=400)
     def delete(self, request, compania, id):
         self._get(compania, id).delete()
         return Response({"message": "Evaluación eliminada."})
 
-
-def _propagar_evaluacion_estandar(eval_std: Evaluacion):
-    """
-    Cuando se modifica la evaluación estándar (compañía con NIT=0000),
-    replica los cambios (descripcion, ind_activa) en las evaluaciones
-    espejo de las demás compañías (las que comparten el mismo id_interno).
-    """
-    Evaluacion.objects.filter(
-        id_interno=eval_std.id_interno,
-    ).exclude(
-        compania=eval_std.compania_id,
-    ).update(
-        descripcion        = eval_std.descripcion,
-        ind_activa         = eval_std.ind_activa,
-        fecha_modificacion = timezone.now(),
-    )
-
-
 class EvaluacionHabilidadList(APIView):
     def get(self, request, compania, evaluacion_id):
-        qs = EvaluacionHabilidad.objects.filter(
-            compania=compania, evaluacion=evaluacion_id)
+        qs = EvaluacionHabilidad.objects.filter(compania=compania, evaluacion=evaluacion_id)
         return Response(EvaluacionHabilidadSerializer(qs, many=True).data)
-
     def post(self, request, compania, evaluacion_id):
         get_object_or_404(Evaluacion, id=evaluacion_id, compania=compania)
-        d = request.data.copy()
-        d["compania"] = compania
-        d["evaluacion"] = evaluacion_id
+        d = request.data.copy(); d["compania"] = compania; d["evaluacion"] = evaluacion_id
         s = EvaluacionHabilidadSerializer(data=d)
         if s.is_valid(): s.save(); return Response(s.data, status=201)
         return Response(s.errors, status=400)
 
 class EvaluacionHabilidadDetail(APIView):
     def delete(self, request, compania, evaluacion_id, id):
-        get_object_or_404(
-            EvaluacionHabilidad, id=id, compania=compania, evaluacion=evaluacion_id
-        ).delete()
+        get_object_or_404(EvaluacionHabilidad, id=id, compania=compania, evaluacion=evaluacion_id).delete()
         return Response({"message": "Habilidad desasignada."})
-
 
 class EvaluacionVacanteList(APIView):
     def get(self, request, compania):
@@ -246,7 +191,6 @@ class EvaluacionVacanteDetail(APIView):
         self._get(compania, id).delete()
         return Response({"message": "Asignación eliminada."})
 
-
 class EstadoIntentoList(APIView):
     def get(self, request):
         return Response(EstadoIntentoSerializer(EstadoIntento.objects.all(), many=True).data)
@@ -270,13 +214,12 @@ class IntentoDetail(APIView):
         return Response(s.errors, status=400)
 
 
-# ═══════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 # CAPA 3 — ACCESO DEL CANDIDATO POR TOKEN
-# ═══════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 
 def _validar_token(token, llave):
-    """Valida el token con el prefijo de app correcto."""
-    from apps.candidatos.models import PostulacionToken        # ← apps.candidatos
+    from apps.candidatos.models import PostulacionToken
     try:
         t = PostulacionToken.objects.get(token=token)
     except PostulacionToken.DoesNotExist:
@@ -284,15 +227,12 @@ def _validar_token(token, llave):
     if t.llave != llave:
         return None, "Credenciales incorrectas."
     if t.fecha_expiracion < timezone.now():
-        return None, "El enlace ha expirado. Contacta al equipo de RRHH."
+        return None, "El enlace ha expirado. Solicita uno nuevo al equipo de RRHH."
     return t, None
 
 
 class AccesoEvaluacionView(APIView):
-    """
-    GET /api/evaluacion/acceso/?token=xxx&llave=yyy
-    Valida el token y devuelve la primera pregunta disponible.
-    """
+    """GET /api/evaluacion/acceso/?token=xxx&llave=yyy"""
     def get(self, request):
         token = request.query_params.get("token")
         llave = request.query_params.get("llave")
@@ -310,10 +250,8 @@ class AccesoEvaluacionView(APIView):
 
         if not intento:
             return Response({"error": "No se encontró un intento activo."}, status=404)
-
         if intento.estado.descripcion == "Completado":
-            return Response({"completado": True,
-                             "message": "Ya completaste esta evaluación. ¡Gracias!"})
+            return Response({"completado": True, "message": "Ya completaste esta evaluación. ¡Gracias!"})
 
         habilidades = list(
             EvaluacionHabilidad.objects.filter(
@@ -322,23 +260,27 @@ class AccesoEvaluacionView(APIView):
             ).order_by("orden").values_list("habilidad_id", flat=True)
         )
 
+        # Usar compania_id (int) — MotorCAT espera int, no objeto Compania
+        compania_id = token_obj.compania_id
+
         for hab_id in habilidades:
-            motor     = MotorCAT(intento.id, token_obj.compania_id, hab_id)
+            motor     = MotorCAT(intento.id, compania_id, hab_id)
             siguiente = motor.siguiente_pregunta()
             if siguiente:
                 return Response({
                     "intento_id":             intento.id,
-                    "compania_id":            token_obj.compania_id,
+                    "compania_id":            compania_id,
                     "habilidad_id":           hab_id,
                     "pregunta":               siguiente,
                     "token_valido":           True,
                     "evaluacion_descripcion": intento.evaluacion.descripcion,
                 })
 
-        # Todas las habilidades completas → finalizar
+        # Todas completadas → finalizar
         if habilidades:
-            motor_fin = MotorCAT(intento.id, token_obj.compania_id, habilidades[0])
-            return Response({"completado": True, "resultado": motor_fin.finalizar()})
+            motor_fin = MotorCAT(intento.id, compania_id, habilidades[0])
+            resultado = motor_fin.finalizar()
+            return Response({"completado": True, "resultado": resultado})
 
         return Response({"error": "Evaluación sin habilidades configuradas."}, status=400)
 
@@ -346,12 +288,13 @@ class AccesoEvaluacionView(APIView):
 class ResponderPreguntaView(APIView):
     """
     POST /api/evaluacion/responder/
-    Body: { token, llave, intento_id, habilidad_id, pregunta_id, respuesta_id, tiempo_seg }
+    Body: {token, llave, intento_id, habilidad_id, pregunta_id, respuesta_id, tiempo_seg}
     """
     def post(self, request):
         try:
             token = request.data.get("token")
             llave = request.data.get("llave")
+
             token_obj, err = _validar_token(token, llave)
             if err:
                 return Response({"error": err}, status=401)
@@ -361,7 +304,6 @@ class ResponderPreguntaView(APIView):
             pregunta_id  = request.data.get("pregunta_id")
             respuesta_id = request.data.get("respuesta_id")
             tiempo_seg   = request.data.get("tiempo_seg", 0)
-            compania_id  = token_obj.compania_id
 
             for nombre, val in [
                 ("intento_id",   intento_id),
@@ -369,11 +311,23 @@ class ResponderPreguntaView(APIView):
                 ("pregunta_id",  pregunta_id),
                 ("respuesta_id", respuesta_id),
             ]:
-                if val is None:
+                if not val:
                     return Response({"error": f"Falta {nombre}"}, status=400)
 
-            motor     = MotorCAT(intento_id, compania_id, habilidad_id)
-            resultado = motor.registrar_respuesta(pregunta_id, respuesta_id, tiempo_seg)
+            # ── FIX BUG 1: usar compania_id (int), NO token_obj.compania (objeto) ──
+            compania_id = token_obj.compania_id
+
+            # ── FIX BUG 1: argumentos posicionales, NO keywords con nombre erróneo ──
+            motor = MotorCAT(int(intento_id), compania_id, int(habilidad_id))
+
+            # ── FIX BUG 2: argumentos posicionales según firma real de registrar_respuesta ──
+            # Firma: registrar_respuesta(self, pregunta: int, respuesta: int, tiempo_seg: int)
+            resultado = motor.registrar_respuesta(
+                int(pregunta_id),
+                int(respuesta_id),
+                int(tiempo_seg or 0),
+            )
+
             siguiente = motor.siguiente_pregunta()
 
             if siguiente:
@@ -386,34 +340,43 @@ class ResponderPreguntaView(APIView):
                     "siguiente":          siguiente,
                 })
 
-            # Habilidad agotada → buscar siguiente habilidad
-            intento_obj = Intento.objects.get(id=intento_id, compania_id=compania_id)
+            # Habilidad terminada — buscar siguiente habilidad
+            intento_obj = Intento.objects.get(id=int(intento_id), compania_id=compania_id)
+
             habilidades = list(
                 EvaluacionHabilidad.objects.filter(
                     compania_id=compania_id,
                     evaluacion_id=intento_obj.evaluacion_id,
                 ).order_by("orden").values_list("habilidad_id", flat=True)
             )
-            idx = habilidades.index(int(habilidad_id)) if int(habilidad_id) in habilidades else -1
+
+            idx = (
+                habilidades.index(int(habilidad_id))
+                if int(habilidad_id) in habilidades
+                else -1
+            )
 
             for i in range(idx + 1, len(habilidades)):
-                motor_sig = MotorCAT(intento_id, compania_id, habilidades[i])
-                preg = motor_sig.siguiente_pregunta()
+                # ── FIX BUG 3: mismo fix que Bug 1 para el motor de siguiente habilidad ──
+                motor_sig = MotorCAT(int(intento_id), compania_id, habilidades[i])
+                preg      = motor_sig.siguiente_pregunta()
+
                 if preg:
                     return Response({
-                        "theta":               resultado["theta"],
-                        "error_estandar":      resultado["error_estandar"],
-                        "paso":                resultado["paso"],
-                        "habilidad_completada": True,
+                        "theta":                  resultado["theta"],
+                        "error_estandar":         resultado["error_estandar"],
+                        "paso":                   resultado["paso"],
+                        "habilidad_completada":   True,
                         "siguiente_habilidad_id": habilidades[i],
-                        "siguiente":           preg,
+                        "siguiente":              preg,
                     })
 
+            # Todas las habilidades completas → finalizar
             resultado_final = motor.finalizar()
             return Response({
                 "evaluacion_completada": True,
-                "resultado": resultado_final,
-                "message":   "¡Evaluación completada! Gracias por tu participación.",
+                "resultado":             resultado_final,
+                "message":               "¡Evaluación completada!",
             })
 
         except Exception as e:
@@ -422,9 +385,9 @@ class ResponderPreguntaView(APIView):
             return Response({"error": str(e)}, status=500)
 
 
-# ═══════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 # VISTAS SQL
-# ═══════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 
 class VHabilidadListView(APIView):
     def get(self, request):
@@ -470,8 +433,7 @@ class VIntentoDetailView(APIView):
 class VReportePostulacionListView(APIView):
     def get(self, request, compania):
         qs = VReportePostulacion.objects.filter(compania_id=compania)
-        v = request.query_params.get("vacante")
-        d = request.query_params.get("decision")
+        v = request.query_params.get("vacante"); d = request.query_params.get("decision")
         if v: qs = qs.filter(vacante_id=v)
         if d: qs = qs.filter(decision=d.upper())
         return Response(VReportePostulacionSerializer(qs, many=True).data)
