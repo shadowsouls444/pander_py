@@ -1,28 +1,8 @@
 """
-evaluacion/cat_engine.py — VERSIÓN DEFINITIVA CORREGIDA
-=========================================================
-Problema raíz del θ en ±4 (extremos):
-  MLE puro diverge a ±∞ cuando TODOS los ítems se contestan igual
-  (todos correctos → θ→+∞, todos incorrectos → θ→−∞).
-  La causa habitual es que los parámetros 'a' en la BD son muy altos
-  (> 2.0) o que el candidato responde perfectamente/pésimamente las
-  primeras preguntas.
-
-Solución psicométrica estándar (EAP — Expected A Posteriori):
-  En lugar de MLE puro se usa una estimación EAP con prior N(0,1),
-  que es el estándar en producción de motores CAT (ej. PARCC, MAP).
-  EAP nunca diverge: pondera la verosimilitud por la densidad normal
-  estándar en una cuadrícula θ ∈ [−4, 4].
-  
-  Se mantiene Newton-Raphson como fallback para convergencia rápida
-  cuando hay suficientes respuestas mixtas (no todas iguales).
-
-Otras correcciones:
-  - ids_usados: set[int] (rc.pregunta_id), no set[Pregunta]
-  - siguiente_pregunta(): usa _banco() con Fisher real
-  - MAX_ITEMS = 15, BANCO_MUESTRA = 15 (aleatorio por semilla)
-  - finalizar(): objeto FK EstadoIntento, no .id raw
-  - registrar_respuesta(): get_or_create (evita duplicados)
+evaluacion/cat_engine.py — v7
+Motor CAT actualizado para filtrar ítems por (compania, evaluacion).
+Cada compañía tiene su propio banco de ítems; las preguntas, respuestas
+y habilidades están ligadas a la compañía y a la evaluación específica.
 """
 
 import math
@@ -33,12 +13,8 @@ from django.db import transaction
 from django.utils import timezone
 
 from .models import (
-    EstadoIntento,
-    HistorialHabilidadEstim,
-    Intento,
-    Pregunta,
-    Respuesta,
-    RespuestaCandidato,
+    EstadoIntento, HistorialHabilidadEstim,
+    Intento, Pregunta, Respuesta, RespuestaCandidato,
 )
 
 # ─────────────────────────────────────────────────────────────
@@ -65,64 +41,37 @@ def error_estandar_se(info_total: float) -> float:
     return 1.0 / math.sqrt(info_total) if info_total > 0.0 else 999.0
 
 
-# ─────────────────────────────────────────────────────────────
-# ESTIMACIÓN EAP (Expected A Posteriori) — estándar psicométrico
-# ─────────────────────────────────────────────────────────────
-
-_CUADRICULA = [round(-4.0 + i * 0.1, 1) for i in range(81)]  # −4 a +4 en pasos de 0.1
-_PRIOR = {t: math.exp(-0.5 * t ** 2) / math.sqrt(2 * math.pi) for t in _CUADRICULA}
+# ── EAP (Expected A Posteriori) ───────────────────────────────
+_GRID  = [round(-4.0 + i * 0.1, 1) for i in range(81)]
+_PRIOR = {t: math.exp(-0.5 * t ** 2) / math.sqrt(2 * math.pi) for t in _GRID}
 
 
 def _log_verosimilitud(theta: float, respuestas: list) -> float:
     lv = 0.0
     for r in respuestas:
-        p = probabilidad_correcta(theta, r["a"], r["b"], r["c"])
-        p = max(1e-10, min(1 - 1e-10, p))
+        p = max(1e-10, min(1-1e-10, probabilidad_correcta(theta, r["a"], r["b"], r["c"])))
         lv += math.log(p) if r["correcto"] else math.log(1 - p)
     return lv
 
 
 def estimar_theta_eap(respuestas: list) -> float:
-    """
-    EAP con prior N(0,1) sobre cuadrícula θ ∈ [−4, 4].
-    Nunca produce extremos ±4. Estándar en CAT de producción.
-    """
     if not respuestas:
         return 0.0
-
-    # Pesos = verosimilitud × prior (en log para evitar underflow)
-    log_pesos = []
-    for t in _CUADRICULA:
-        lv = _log_verosimilitud(t, respuestas)
-        lp = math.log(max(1e-300, _PRIOR[t]))
-        log_pesos.append(lv + lp)
-
-    # Escalar (restar máximo) antes de exp para estabilidad numérica
+    log_pesos = [_log_verosimilitud(t, respuestas) + math.log(max(1e-300, _PRIOR[t]))
+                 for t in _GRID]
     max_lp = max(log_pesos)
     pesos  = [math.exp(lp - max_lp) for lp in log_pesos]
     total  = sum(pesos)
-
     if total == 0.0:
         return 0.0
-
-    theta_eap = sum(t * w for t, w in zip(_CUADRICULA, pesos)) / total
-    return round(theta_eap, 4)
+    return round(sum(t * w for t, w in zip(_GRID, pesos)) / total, 4)
 
 
-def estimar_theta_mle(
-    respuestas: list,
-    theta_inicial: float = 0.0,
-    max_iter: int = 50,
-    tolerancia: float = 0.001,
-) -> float:
-    """
-    MLE Newton-Raphson con límite ±3.5 (no ±4) para evitar extremos.
-    Se usa cuando hay respuestas mixtas (más preciso que EAP con muchos ítems).
-    """
+def estimar_theta_mle(respuestas: list, theta_ini: float = 0.0) -> float:
     if not respuestas:
         return 0.0
-    theta = theta_inicial
-    for _ in range(max_iter):
+    theta = theta_ini
+    for _ in range(50):
         d1 = d2 = 0.0
         for r in respuestas:
             a, b, c = r["a"], r["b"], r["c"]
@@ -133,32 +82,24 @@ def estimar_theta_mle(
                 continue
             factor = (1.7 * a * (p - c)) / ((1.0 - c) * p)
             d1 += factor * (u - p) / p
-            d2 -= (1.7 ** 2) * (a ** 2) * ((p - c) / (1.0 - c)) ** 2 * (q / p)
+            d2 -= (1.7**2) * (a**2) * ((p - c)/(1.0-c))**2 * (q/p)
         if d2 == 0.0:
             break
         delta = d1 / d2
-        theta = max(-3.5, min(3.5, theta - delta))  # límite más conservador
-        if abs(delta) < tolerancia:
+        theta = max(-3.5, min(3.5, theta - delta))
+        if abs(delta) < 0.001:
             break
     return round(theta, 4)
 
 
 def estimar_theta(respuestas: list) -> float:
-    """
-    Estrategia híbrida:
-      - 0 respuestas → θ = 0
-      - Patrón puro (todos correctos o todos incorrectos) → EAP (estabilizado)
-      - Patrón mixto con ≥ 3 ítems → MLE (más preciso)
-      - < 3 ítems → EAP (prior domina, evita extremos)
-    """
+    """Híbrido EAP/MLE: EAP para patrones puros, MLE para mixtos."""
     if not respuestas:
         return 0.0
     correctos = sum(1 for r in respuestas if r["correcto"])
-    total = len(respuestas)
-    # Patrón puro o pocos ítems: EAP estabilizado
+    total     = len(respuestas)
     if correctos == 0 or correctos == total or total < 3:
         return estimar_theta_eap(respuestas)
-    # Patrón mixto con suficientes ítems: MLE refinado
     return estimar_theta_mle(respuestas)
 
 
@@ -167,15 +108,6 @@ def estimar_theta(respuestas: list) -> float:
 # ─────────────────────────────────────────────────────────────
 
 class MotorCAT:
-    """
-    Motor CAT para UNA habilidad dentro de UN intento.
-
-    MAX_ITEMS     = 15  máximo de preguntas por habilidad
-    MIN_ITEMS     = 3   mínimo antes de aplicar criterio SE
-    UMBRAL_SE     = 0.45 SE < 0.45 → precisión suficiente (EAP converge más lento)
-    BANCO_MUESTRA = 15  ítems seleccionados aleatoriamente del banco
-    """
-
     MAX_ITEMS     = 15
     MIN_ITEMS     = 3
     UMBRAL_SE     = 0.45
@@ -186,53 +118,60 @@ class MotorCAT:
         self.compania_id  = int(compania_id)
         self.habilidad_id = int(habilidad_id)
         self.intento = Intento.objects.select_related("estado", "evaluacion").get(
-            id=self.intento_id,
-            compania_id=self.compania_id,
+            id=self.intento_id, compania_id=self.compania_id,
         )
+        # ID de la evaluación del intento
+        self.evaluacion_id = self.intento.evaluacion_id
 
     def _banco(self) -> list:
         """
-        Muestrea BANCO_MUESTRA ítems del banco global con semilla reproducible.
-        Semilla = intento_id × 10000 + habilidad_id garantiza:
-          - Mismo candidato/intento → mismo subconjunto (reproducibilidad).
-          - Candidatos distintos → subconjuntos distintos (seguridad).
+        Banco de ítems filtrado por (compania, evaluacion, habilidad).
+        Si los campos compania/evaluacion están vacíos (banco legacy),
+        hace fallback al banco global (compania IS NULL).
         """
+        # Primero intentar con compania + evaluacion específicos
         qs = list(
             Pregunta.objects.filter(
+                compania_id=self.compania_id,
+                evaluacion_id=self.evaluacion_id,
                 habilidad_id=self.habilidad_id,
                 ind_activa=True,
             ).values("id", "criterio_a", "criterio_b", "criterio_c")
         )
+
+        # Fallback: banco global (compania IS NULL — datos legacy)
+        if not qs:
+            qs = list(
+                Pregunta.objects.filter(
+                    compania__isnull=True,
+                    habilidad_id=self.habilidad_id,
+                    ind_activa=True,
+                ).values("id", "criterio_a", "criterio_b", "criterio_c")
+            )
+
         if not qs:
             return []
+
         seed    = self.intento_id * 10_000 + self.habilidad_id
         rng     = random.Random(seed)
         n       = min(self.BANCO_MUESTRA, len(qs))
         muestra = rng.sample(qs, n)
-        return [
-            {"id": p["id"], "a": p["criterio_a"], "b": p["criterio_b"], "c": p["criterio_c"]}
-            for p in muestra
-        ]
+        return [{"id": p["id"], "a": p["criterio_a"], "b": p["criterio_b"], "c": p["criterio_c"]}
+                for p in muestra]
 
     def _previas(self) -> tuple:
-        """
-        ids_usados: set[int] — pregunta_id como int, nunca objeto Pregunta.
-        """
         qs = RespuestaCandidato.objects.filter(
             compania_id=self.compania_id,
             intento_id=self.intento_id,
             pregunta__habilidad_id=self.habilidad_id,
         ).select_related("pregunta", "respuesta")
 
-        datos: list = []
-        ids:   set  = set()
+        datos, ids = [], set()
         for rc in qs:
-            ids.add(rc.pregunta_id)   # ← int, nunca objeto
+            ids.add(rc.pregunta_id)
             datos.append({
-                "a":        rc.pregunta.criterio_a,
-                "b":        rc.pregunta.criterio_b,
-                "c":        rc.pregunta.criterio_c,
-                "correcto": rc.respuesta.ind_correcta,
+                "a": rc.pregunta.criterio_a, "b": rc.pregunta.criterio_b,
+                "c": rc.pregunta.criterio_c, "correcto": rc.respuesta.ind_correcta,
             })
         return datos, ids
 
@@ -240,11 +179,8 @@ class MotorCAT:
         datos, ids_usados = self._previas()
         n = len(ids_usados)
 
-        # Criterio de parada: máximo de ítems
         if n >= self.MAX_ITEMS:
             return None
-
-        # Criterio de parada: precisión suficiente
         if n >= self.MIN_ITEMS and datos:
             theta_act  = estimar_theta(datos)
             info_total = sum(informacion_fisher(theta_act, r["a"], r["b"], r["c"]) for r in datos)
@@ -253,12 +189,11 @@ class MotorCAT:
 
         theta      = estimar_theta(datos) if datos else 0.0
         banco      = self._banco()
-        candidatos = [item for item in banco if item["id"] not in ids_usados]
+        candidatos = [i for i in banco if i["id"] not in ids_usados]
         if not candidatos:
             return None
 
         mejor = max(candidatos, key=lambda i: informacion_fisher(theta, i["a"], i["b"], i["c"]))
-
         try:
             preg = Pregunta.objects.prefetch_related("respuestas").get(id=mejor["id"])
         except Pregunta.DoesNotExist:
@@ -278,18 +213,16 @@ class MotorCAT:
         now      = timezone.now()
 
         RespuestaCandidato.objects.get_or_create(
-            compania_id=self.compania_id,
-            intento_id=self.intento_id,
-            pregunta=preg_obj,
+            compania_id=self.compania_id, intento_id=self.intento_id, pregunta=preg_obj,
             defaults={"respuesta": resp_obj, "tiempo_respuesta": tiempo_seg,
                       "fecha_respuesta": now, "fecha_creacion": now},
         )
 
-        datos, ids_usados = self._previas()
+        datos, ids = self._previas()
         theta = estimar_theta(datos)
         info  = sum(informacion_fisher(theta, r["a"], r["b"], r["c"]) for r in datos)
         se    = error_estandar_se(info)
-        paso  = len(ids_usados)
+        paso  = len(ids)
 
         HistorialHabilidadEstim.objects.create(
             compania_id=self.compania_id, intento_id=self.intento_id,

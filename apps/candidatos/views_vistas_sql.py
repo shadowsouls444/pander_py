@@ -1,7 +1,7 @@
 from django.shortcuts import get_object_or_404
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from .models_vistas_sql import VCandidato, VPostulacion, VAnexoCandidato
+from .models import VCandidato, VPostulacion, VAnexoCandidato
 from .serializers import (
     VCandidatoSerializer, VPostulacionSerializer, VAnexoCandidatoSerializer,
 )

@@ -1,5 +1,5 @@
 from django.urls import path
-from . import views
+from . import views, views_vistas_sql
 
 urlpatterns = [
     path("companias/",              views.CompaniaList.as_view(),   name="compania-list"),
@@ -9,8 +9,8 @@ urlpatterns = [
     path("companias/<int:compania>/unidades/<int:id>/",
          views.UnidadOrgDetail.as_view(), name="unidad-detail"),
     # Vistas SQL
-    path("v/companias/",                            views.VCompaniaListView.as_view(),   name="v-compania-list"),
-    path("v/companias/<int:id>/",                   views.VCompaniaDetailView.as_view(), name="v-compania-detail"),
-    path("v/companias/<int:compania>/unidades/",    views.VUnidadOrgListView.as_view(),  name="v-unidad-list"),
-    path("v/companias/<int:compania>/unidades/<int:id>/", views.VUnidadOrgDetailView.as_view(), name="v-unidad-detail"),
+    path("v/companias/",                            views_vistas_sql.VCompaniaListView.as_view(),   name="v-compania-list"),
+    path("v/companias/<int:id>/",                   views_vistas_sql.VCompaniaDetailView.as_view(), name="v-compania-detail"),
+    path("v/companias/<int:compania>/unidades/",    views_vistas_sql.VUnidadOrgListView.as_view(),  name="v-unidad-list"),
+    path("v/companias/<int:compania>/unidades/<int:id>/", views_vistas_sql.VUnidadOrgDetailView.as_view(), name="v-unidad-detail"),
 ]

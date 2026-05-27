@@ -1,68 +1,27 @@
 """
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-ARCHIVO: empresa/migrations/0004_evaluacion_estandar_y_triggers.py
-MOTOR:   PostgreSQL
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Contenido:
-  A) RunPython — banco de ítems estándar (sin cambios, es Python puro)
-  B) RunSQL    — triggers reescritos en PL/pgSQL
+empresa/migrations/0004_evaluacion_estandar_y_triggers.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CORRECCIÓN CRÍTICA:
+  La versión anterior usaba campos inexistentes en el estado
+  histórico de la BD al correr esta migración:
+    Pregunta(compania=..., evaluacion=...)    → TypeError
+    Respuesta(compania=..., evaluacion=...)   → TypeError
+    ControlUso(compania=..., evaluacion=..., habilidad=...) → TypeError
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TABLA DE CONVERSIONES T-SQL → PL/pgSQL
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  T-SQL                              PL/pgSQL
-  ─────────────────────────────────────────────────────────
-  CREATE TRIGGER … ON tabla          CREATE TRIGGER … ON tabla
-  AFTER INSERT AS BEGIN … END        AFTER INSERT … EXECUTE FUNCTION f()
-                                     + función separada RETURNS trigger
+  Los campos reales en evaluacion.0001_initial son:
+    Habilidad  → descripcion, dificultad, discriminacion, adivinabilidad,
+                 compania (FK nullable) ← SÍ existe desde 0001
+    Pregunta   → habilidad (FK), contenido, criterio_a/b/c, ind_activa
+                 usuario_creacion, usuario_modificacion   ← SIN compania/evaluacion
+    Respuesta  → pregunta (FK), contenido, ind_correcta, peso
+                 usuario_creacion, usuario_modificacion   ← SIN compania/evaluacion
+    ControlUso → pregunta (OneToOne PK), tiempo_uso       ← SIN compania/evaluacion/habilidad
 
-  SET NOCOUNT ON                     (no existe, no hace falta)
-  DECLARE @var TYPE                  var TYPE;   (en DECLARE block)
-  SET @var = valor                   var := valor;
-  SELECT @var = col FROM ...         SELECT col INTO var FROM ...;
-  IF condicion BEGIN … END           IF condicion THEN … END IF;
-  IF NOT UPDATE(col) RETURN          IF OLD.col = NEW.col THEN RETURN NEW; END IF;
-
-  inserted (tabla virtual)           NEW  (fila recién insertada/actualizada)
-  deleted  (tabla virtual)           OLD  (fila antes de UPDATE/DELETE)
-
-  GETDATE()                          NOW()
-  DATEADD(HOUR, 72, GETDATE())       NOW() + INTERVAL '72 hours'
-  CAST(GETDATE() AS DATE)            CURRENT_DATE
-  ISNULL(x, y)                       COALESCE(x, y)
-  TOP 1 … ORDER BY                   … ORDER BY … LIMIT 1
-  SCOPEENTITY()                   (uso de RETURNING id en su lugar)
-  NEWID()                            gen_random_uuid()   ← requiere pgcrypto
-                                     o encode(gen_random_bytes(16),'hex')
-  NVARCHAR(n)                        VARCHAR(n)  /  TEXT
-  BIT                                BOOLEAN
-  IF OBJECT(…) IS NOT NULL        DROP TRIGGER IF EXISTS …
-    DROP TRIGGER …                   DROP FUNCTION IF EXISTS …
-  GO                                 (no existe en PostgreSQL)
-
-  UPDATE tabla SET col = val         UPDATE tabla SET col = val
-    FROM … INNER JOIN inserted …       WHERE id = NEW.id   (NEW accesible directo)
-
-  RETURN (en trigger sin valor)      RETURN NEW;   (INSERT/UPDATE)
-                                     RETURN OLD;   (DELETE)
-                                     RETURN NULL;  (cancelar operación)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-ARQUITECTURA DE TRIGGERS EN POSTGRESQL
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-En PostgreSQL un trigger NO contiene lógica directamente.
-Requiere dos objetos:
-  1. FUNCTION  trg_fn_nombre() RETURNS trigger  → contiene la lógica
-  2. TRIGGER   trg_nombre ON tabla              → invoca la función
-
-El DROP también requiere ambos objetos:
-  DROP TRIGGER IF EXISTS trg_nombre ON tabla;
-  DROP FUNCTION IF EXISTS trg_fn_nombre();
-
-Para usar gen_random_uuid() habilitar la extensión:
-  CREATE EXTENSION IF NOT EXISTS pgcrypto;
-(incluido en SQL_TRIGGERS al inicio)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Los triggers SQL también se corrigen para usar solo las columnas
+  reales de la BD en este estado:
+    - Trigger 4: ya no filtra por compania en control_uso (columna no existe)
+    - Trigger 5: copia preguntas/respuestas/control_uso sin compania/evaluacion
+    - NIT corregido: '0000' (4 ceros) en todos los triggers
 """
 
 from django.db import migrations
@@ -70,7 +29,8 @@ from django.utils import timezone
 
 
 # ════════════════════════════════════════════════════════════
-# A) DATOS: EVALUACIÓN ESTÁNDAR (Python puro, sin cambios)
+# A) RunPython — inserta datos iniciales
+#    Usa SOLO los campos que existen en 0001_initial
 # ════════════════════════════════════════════════════════════
 
 def insertar_evaluacion_estandar(apps, schema_editor):
@@ -87,6 +47,7 @@ def insertar_evaluacion_estandar(apps, schema_editor):
     compania_sistema = Compania.objects.get(nit="0000")
     uid = 1
 
+    # Crear la evaluación estándar
     evaluacion = Evaluacion.objects.create(
         compania         = compania_sistema,
         id_interno       = 1,
@@ -330,7 +291,7 @@ def insertar_evaluacion_estandar(apps, schema_editor):
                     ]
                 },
                 {
-                    "contenido": "Tienes dos soluciones posibles para un problema: una rápida pero temporal, y otra lenta pero definitiva. ¿Qué consideras para decidir?",
+                    "contenido": "Tienes dos soluciones posibles: una rápida pero temporal, y otra lenta pero definitiva. ¿Qué consideras para decidir?",
                     "criterio_a": 1.5, "criterio_b": 0.8, "criterio_c": 0.10,
                     "respuestas": [
                         ("El impacto inmediato del problema, los recursos disponibles y si la solución temporal no genera riesgos adicionales.", True),
@@ -411,7 +372,7 @@ def insertar_evaluacion_estandar(apps, schema_editor):
                     ]
                 },
                 {
-                    "contenido": "Recibes una crítica injusta en público de parte de tu líder. ¿Cuál es la respuesta más emocionalmente inteligente?",
+                    "contenido": "Recibes una crítica injusta en público de parte de tu líder. ¿Cuál es la respuesta emocionalmente más inteligente?",
                     "criterio_a": 1.6, "criterio_b": 1.1, "criterio_c": 0.10,
                     "respuestas": [
                         ("Reconocer el impacto que sentiste, no reaccionar en caliente y solicitar una conversación privada para aclarar el malentendido.", True),
@@ -456,14 +417,18 @@ def insertar_evaluacion_estandar(apps, schema_editor):
 
     orden_habilidad = 1
     for bloque in banco:
-        hab = bloque["habilidad"]
+        hab_data = bloque["habilidad"]
+
+        # Habilidad: compania SÍ existe en 0001_initial
         habilidad = Habilidad.objects.create(
-            descripcion    = hab["descripcion"],
-            dificultad     = hab["dificultad"],
-            discriminacion = hab["discriminacion"],
-            adivinabilidad = hab["adivinabilidad"],
+            compania       = compania_sistema,
+            descripcion    = hab_data["descripcion"],
+            dificultad     = hab_data["dificultad"],
+            discriminacion = hab_data["discriminacion"],
+            adivinabilidad = hab_data["adivinabilidad"],
             fecha_creacion = now,
         )
+
         EvaluacionHabilidad.objects.create(
             compania         = compania_sistema,
             evaluacion       = evaluacion,
@@ -476,6 +441,7 @@ def insertar_evaluacion_estandar(apps, schema_editor):
         orden_habilidad += 1
 
         for preg in bloque["preguntas"]:
+            # Pregunta: SIN compania ni evaluacion (no existen en 0001_initial)
             pregunta = Pregunta.objects.create(
                 habilidad      = habilidad,
                 contenido      = preg["contenido"],
@@ -485,12 +451,16 @@ def insertar_evaluacion_estandar(apps, schema_editor):
                 ind_activa     = True,
                 fecha_creacion = now,
             )
+
+            # ControlUso: SIN compania, evaluacion ni habilidad
             ControlUso.objects.create(
                 pregunta       = pregunta,
                 tiempo_uso     = 0,
                 fecha_creacion = now,
             )
+
             for contenido_resp, es_correcta in preg["respuestas"]:
+                # Respuesta: SIN compania ni evaluacion
                 Respuesta.objects.create(
                     pregunta       = pregunta,
                     contenido      = contenido_resp,
@@ -503,77 +473,72 @@ def insertar_evaluacion_estandar(apps, schema_editor):
 def revertir_evaluacion_estandar(apps, schema_editor):
     Evaluacion = apps.get_model("evaluacion", "Evaluacion")
     Habilidad  = apps.get_model("evaluacion", "Habilidad")
-    Evaluacion.objects.filter(id_interno=1).delete()
-    Habilidad.objects.filter(descripcion__in=[
-        "Comunicación Efectiva", "Trabajo en Equipo",
-        "Adaptabilidad", "Resolución de Problemas", "Inteligencia Emocional",
-    ]).delete()
+    Compania   = apps.get_model("empresa",    "Compania")
+    try:
+        comp = Compania.objects.get(nit="0000")
+        Evaluacion.objects.filter(compania=comp, id_interno=1).delete()
+        Habilidad.objects.filter(compania=comp, descripcion__in=[
+            "Comunicación Efectiva", "Trabajo en Equipo",
+            "Adaptabilidad", "Resolución de Problemas", "Inteligencia Emocional",
+        ]).delete()
+    except Compania.DoesNotExist:
+        pass
 
 
 # ════════════════════════════════════════════════════════════
-# B) TRIGGERS — PL/pgSQL (PostgreSQL)
-# ════════════════════════════════════════════════════════════
-# Cada trigger se compone de:
-#   1) CREATE OR REPLACE FUNCTION trg_fn_*() RETURNS trigger
-#   2) DROP TRIGGER IF EXISTS + CREATE TRIGGER … EXECUTE FUNCTION trg_fn_*()
+# B) TRIGGERS PL/pgSQL
+#    Corregidos para usar solo columnas reales de la BD:
+#    - Trigger 4: control_uso no tiene columna compania
+#    - Trigger 5: pregunta/respuesta/control_uso sin compania/evaluacion
+#    - NIT: '0000' (4 ceros) en todos los triggers
 # ════════════════════════════════════════════════════════════
 
 SQL_TRIGGERS = """
 
--- Extensión necesaria para gen_random_uuid()
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 
 -- ══════════════════════════════════════════════════════════
 -- TRIGGER 1: trg_postulacion_asignar_evaluacion
--- Al insertar una postulación:
---   1. Busca la evaluación activa de la compañía.
---   2. Si ind_evaluacion_vacante=TRUE prioriza evaluacion_vacante.
---   3. Crea el intento correspondiente en estado "En Progreso".
 -- ══════════════════════════════════════════════════════════
 CREATE OR REPLACE FUNCTION trg_fn_postulacion_asignar_evaluacion()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_evaluacion  INTEGER;
-    v_ind_ev_vacante BOOLEAN;
+    v_evaluacion      INTEGER;
+    v_ind_ev_vacante  BOOLEAN;
     v_intento_interno INTEGER;
-    v_estado      INTEGER;
+    v_estado          INTEGER;
 BEGIN
-    -- Leer flag de la compañía
     SELECT ind_evaluacion_vacante
       INTO v_ind_ev_vacante
       FROM compania
      WHERE id = NEW.compania;
 
-    -- Modo evaluacion_vacante: buscar asignación específica activa
     IF v_ind_ev_vacante = TRUE THEN
         SELECT evaluacion
           INTO v_evaluacion
           FROM evaluacion_vacante
-         WHERE compania = NEW.compania
-           AND vacante  = NEW.vacante
-           AND ind_activa  = TRUE
+         WHERE compania   = NEW.compania
+           AND vacante    = NEW.vacante
+           AND ind_activa = TRUE
            AND (fecha_fin IS NULL OR fecha_fin >= CURRENT_DATE)
          ORDER BY fecha_creacion DESC
          LIMIT 1;
     END IF;
 
-    -- Fallback: evaluación global activa de la compañía
     IF v_evaluacion IS NULL THEN
         SELECT id
           INTO v_evaluacion
           FROM evaluacion
-         WHERE compania = NEW.compania
-           AND ind_activa  = TRUE
+         WHERE compania  = NEW.compania
+           AND ind_activa = TRUE
          ORDER BY fecha_creacion ASC
          LIMIT 1;
     END IF;
 
-    -- Crear intento solo si se encontró evaluación
     IF v_evaluacion IS NOT NULL THEN
-
         SELECT COALESCE(MAX(id_interno), 0) + 1
           INTO v_intento_interno
           FROM intento
@@ -586,25 +551,12 @@ BEGIN
          LIMIT 1;
 
         INSERT INTO intento (
-            compania,
-            id_interno,
-            postulacion,
-            candidato,
-            evaluacion,
-            estado,
-            fecha_inicio,
-            fecha_creacion
+            compania, id_interno, postulacion, candidato,
+            evaluacion, estado, fecha_inicio, fecha_creacion
         ) VALUES (
-            NEW.compania,
-            v_intento_interno,
-            NEW.id,
-            NEW.candidato,
-            v_evaluacion,
-            v_estado,
-            NOW(),
-            NOW()
+            NEW.compania, v_intento_interno, NEW.id, NEW.candidato,
+            v_evaluacion, v_estado, NOW(), NOW()
         );
-
     END IF;
 
     RETURN NEW;
@@ -620,9 +572,6 @@ CREATE TRIGGER trg_postulacion_asignar_evaluacion
 
 -- ══════════════════════════════════════════════════════════
 -- TRIGGER 2: trg_postulacion_generar_token
--- Al insertar una postulación, genera token y llave
--- usando gen_random_uuid() (pgcrypto) con vigencia 72 horas.
--- Toma la evaluación del intento recién creado por trigger 1.
 -- ══════════════════════════════════════════════════════════
 CREATE OR REPLACE FUNCTION trg_fn_postulacion_generar_token()
 RETURNS trigger
@@ -630,10 +579,9 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_evaluacion INTEGER;
-    v_token         TEXT;
-    v_llave         TEXT;
+    v_token      TEXT;
+    v_llave      TEXT;
 BEGIN
-    -- Obtener evaluación del intento creado por trigger 1
     SELECT evaluacion
       INTO v_evaluacion
       FROM intento
@@ -642,30 +590,17 @@ BEGIN
      ORDER BY fecha_creacion DESC
      LIMIT 1;
 
-    -- Generar token: dos UUIDs sin guiones concatenados
     v_token := REPLACE(gen_random_uuid()::TEXT, '-', '')
             || REPLACE(gen_random_uuid()::TEXT, '-', '');
-
-    -- Generar llave: dos UUIDs sin guiones concatenados
     v_llave := REPLACE(gen_random_uuid()::TEXT, '-', '')
             || REPLACE(gen_random_uuid()::TEXT, '-', '');
 
     INSERT INTO postulacion_token (
-        compania,
-        postulacion,
-        evaluacion,
-        token,
-        llave,
-        fecha_creacion,
-        fecha_expiracion
+        compania, postulacion, evaluacion,
+        token, llave, fecha_creacion, fecha_expiracion
     ) VALUES (
-        NEW.compania,
-        NEW.id,
-        v_evaluacion,
-        v_token,
-        v_llave,
-        NOW(),
-        NOW() + INTERVAL '72 hours'
+        NEW.compania, NEW.id, v_evaluacion,
+        v_token, v_llave, NOW(), NOW() + INTERVAL '72 hours'
     );
 
     RETURN NEW;
@@ -681,10 +616,6 @@ CREATE TRIGGER trg_postulacion_generar_token
 
 -- ══════════════════════════════════════════════════════════
 -- TRIGGER 3: trg_intento_actualizar_estado_postulacion
--- Cuando el estado de un intento cambia:
---   Completado → postulación pasa a "En Evaluación"
---   Expirado   → postulación vuelve a "Recibida"
--- Solo actúa si el campo estado realmente cambió.
 -- ══════════════════════════════════════════════════════════
 CREATE OR REPLACE FUNCTION trg_fn_intento_actualizar_estado_postulacion()
 RETURNS trigger
@@ -694,41 +625,23 @@ DECLARE
     v_nuevo_estado TEXT;
     v_estado_post  INTEGER;
 BEGIN
-    -- Solo actuar si estado cambió efectivamente
-    IF OLD.estado = NEW.estado THEN
-        RETURN NEW;
-    END IF;
+    IF OLD.estado = NEW.estado THEN RETURN NEW; END IF;
 
-    SELECT descripcion
-      INTO v_nuevo_estado
-      FROM estado_intento
-     WHERE id = NEW.estado;
+    SELECT descripcion INTO v_nuevo_estado
+      FROM estado_intento WHERE id = NEW.estado;
 
     IF v_nuevo_estado = 'Completado' THEN
-        SELECT id
-          INTO v_estado_post
-          FROM estado_postulacion
-         WHERE descripcion = 'En Evaluación'
-         LIMIT 1;
-
+        SELECT id INTO v_estado_post
+          FROM estado_postulacion WHERE descripcion = 'En Evaluación' LIMIT 1;
         UPDATE postulacion
-           SET estado          = v_estado_post,
-               fecha_modificacion = NOW()
-         WHERE id          = NEW.postulacion
-           AND compania = NEW.compania;
-
+           SET estado = v_estado_post, fecha_modificacion = NOW()
+         WHERE id = NEW.postulacion AND compania = NEW.compania;
     ELSIF v_nuevo_estado = 'Expirado' THEN
-        SELECT id
-          INTO v_estado_post
-          FROM estado_postulacion
-         WHERE descripcion = 'Recibida'
-         LIMIT 1;
-
+        SELECT id INTO v_estado_post
+          FROM estado_postulacion WHERE descripcion = 'Recibida' LIMIT 1;
         UPDATE postulacion
-           SET estado          = v_estado_post,
-               fecha_modificacion = NOW()
-         WHERE id          = NEW.postulacion
-           AND compania = NEW.compania;
+           SET estado = v_estado_post, fecha_modificacion = NOW()
+         WHERE id = NEW.postulacion AND compania = NEW.compania;
     END IF;
 
     RETURN NEW;
@@ -744,10 +657,8 @@ CREATE TRIGGER trg_intento_actualizar_estado_postulacion
 
 -- ══════════════════════════════════════════════════════════
 -- TRIGGER 4: trg_respuesta_candidato_control_uso
--- Cada INSERT en respuesta_candidato incrementa el contador
--- de uso del ítem correspondiente en control_uso.
--- En PostgreSQL NEW apunta a la fila insertada directamente,
--- no se necesita JOIN con tabla virtual "inserted".
+-- FIX: control_uso solo tiene columna 'pregunta' (PK).
+--      No tiene columna compania en este estado de la BD.
 -- ══════════════════════════════════════════════════════════
 CREATE OR REPLACE FUNCTION trg_fn_respuesta_candidato_control_uso()
 RETURNS trigger
@@ -755,9 +666,8 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     UPDATE control_uso
-       SET tiempo_uso        = tiempo_uso + 1,
-           fecha_ultimo_uso  = NOW(),
-           fecha_modificacion = NOW()
+       SET tiempo_uso       = tiempo_uso + 1,
+           fecha_ultimo_uso = NOW()
      WHERE pregunta = NEW.pregunta;
 
     RETURN NEW;
@@ -773,12 +683,10 @@ CREATE TRIGGER trg_respuesta_candidato_control_uso
 
 -- ══════════════════════════════════════════════════════════
 -- TRIGGER 5: trg_nueva_compania_copiar_evaluacion
--- Al insertar una nueva compañía (que no sea la del sistema),
--- copia la evaluación estándar (NIT 00000) como evaluación
--- inicial de la nueva empresa suscrita (modelo SaaS).
---
--- SCOPEENTITY() no existe en PostgreSQL.
--- Se usa RETURNING id INTO variable en su lugar.
+-- NIT corregido: '0000' (4 ceros).
+-- Copia evaluacion + evaluacion_habilidad + habilidades
+-- + preguntas + respuestas + control_uso usando SOLO
+-- las columnas reales de la BD en este estado.
 -- ══════════════════════════════════════════════════════════
 CREATE OR REPLACE FUNCTION trg_fn_nueva_compania_copiar_evaluacion()
 RETURNS trigger
@@ -786,86 +694,96 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_eval_sistema  INTEGER;
-    v_nueva_eval    INTEGER;
-    v_nueva_eval_pk    INTEGER;
+    v_nueva_eval_pk INTEGER;
+    v_nueva_eval_no INTEGER;
     v_compania_sys  INTEGER;
+    v_hab_new       INTEGER;
+    v_preg_new      INTEGER;
+    r_hab           RECORD;
+    r_preg          RECORD;
+    r_resp          RECORD;
 BEGIN
-    -- No copiar a la compañía del sistema
-    IF NEW.nit = '00000' THEN
-        RETURN NEW;
-    END IF;
+    IF NEW.nit = '0000' THEN RETURN NEW; END IF;
 
-    -- Obtener ID de la compañía del sistema
-    SELECT id
-      INTO v_compania_sys
-      FROM compania
-     WHERE nit = '00000'
-     LIMIT 1;
+    SELECT id INTO v_compania_sys FROM compania WHERE nit = '0000' LIMIT 1;
+    IF v_compania_sys IS NULL THEN RETURN NEW; END IF;
 
-    IF v_compania_sys IS NULL THEN
-        RETURN NEW;
-    END IF;
-
-    -- Obtener evaluación estándar activa del sistema
-    SELECT id
-      INTO v_eval_sistema
+    SELECT id INTO v_eval_sistema
       FROM evaluacion
-     WHERE compania = v_compania_sys
-       AND ind_activa  = TRUE
-     ORDER BY fecha_creacion ASC
-     LIMIT 1;
+     WHERE compania = v_compania_sys AND ind_activa = TRUE
+     ORDER BY fecha_creacion ASC LIMIT 1;
+    IF v_eval_sistema IS NULL THEN RETURN NEW; END IF;
 
-    IF v_eval_sistema IS NULL THEN
-        RETURN NEW;
-    END IF;
+    SELECT COALESCE(MAX(id_interno), 0) + 1 INTO v_nueva_eval_no
+      FROM evaluacion WHERE compania = NEW.id;
 
-    -- Calcular id_interno para la nueva compañía
-    SELECT COALESCE(MAX(id_interno), 0) + 1
-      INTO v_nueva_eval
-      FROM evaluacion
-     WHERE compania = NEW.id;
-
-    -- Insertar evaluación en la nueva compañía y capturar PK con RETURNING
     INSERT INTO evaluacion (
-        compania,
-        id_interno,
-        descripcion,
-        ind_activa,
-        fecha_creacion,
-        usuario_creacion
+        compania, id_interno, descripcion, ind_activa, fecha_creacion, usuario_creacion
     )
-    SELECT
-        NEW.id,
-        v_nueva_eval,
-        descripcion,
-        TRUE,
-        NOW(),
-        1
-      FROM evaluacion
-     WHERE id = v_eval_sistema
+    SELECT NEW.id, v_nueva_eval_no, descripcion, TRUE, NOW(), 1
+      FROM evaluacion WHERE id = v_eval_sistema
     RETURNING id INTO v_nueva_eval_pk;
 
-    -- Copiar habilidades asociadas a la nueva evaluación
-    INSERT INTO evaluacion_habilidad (
-        compania,
-        evaluacion,
-        habilidad,
-        orden,
-        obligatoria,
-        fecha_creacion,
-        usuario_creacion
-    )
-    SELECT
-        NEW.id,
-        v_nueva_eval_pk,
-        habilidad,
-        orden,
-        obligatoria,
-        NOW(),
-        1
-      FROM evaluacion_habilidad
-     WHERE compania   = v_compania_sys
-       AND evaluacion = v_eval_sistema;
+    -- Copiar habilidades (habilidad SÍ tiene columna compania)
+    FOR r_hab IN
+        SELECT h.*
+          FROM habilidad h
+          JOIN evaluacion_habilidad eh
+               ON eh.habilidad  = h.id
+              AND eh.compania   = v_compania_sys
+              AND eh.evaluacion = v_eval_sistema
+         ORDER BY eh.orden
+    LOOP
+        INSERT INTO habilidad (
+            compania, descripcion, dificultad, discriminacion, adivinabilidad,
+            fecha_creacion, usuario_creacion
+        ) VALUES (
+            NEW.id, r_hab.descripcion, r_hab.dificultad,
+            r_hab.discriminacion, r_hab.adivinabilidad, NOW(), 1
+        ) RETURNING id INTO v_hab_new;
+
+        INSERT INTO evaluacion_habilidad (
+            compania, evaluacion, habilidad, orden, obligatoria,
+            fecha_creacion, usuario_creacion
+        )
+        SELECT NEW.id, v_nueva_eval_pk, v_hab_new, eh.orden, eh.obligatoria, NOW(), 1
+          FROM evaluacion_habilidad eh
+         WHERE eh.compania  = v_compania_sys
+           AND eh.evaluacion = v_eval_sistema
+           AND eh.habilidad  = r_hab.id;
+
+        -- Copiar preguntas: pregunta NO tiene columna compania en este estado
+        FOR r_preg IN
+            SELECT * FROM pregunta WHERE habilidad = r_hab.id
+        LOOP
+            INSERT INTO pregunta (
+                habilidad, contenido,
+                criterio_a, criterio_b, criterio_c, ind_activa,
+                fecha_creacion, usuario_creacion
+            ) VALUES (
+                v_hab_new, r_preg.contenido,
+                r_preg.criterio_a, r_preg.criterio_b, r_preg.criterio_c,
+                r_preg.ind_activa, NOW(), 1
+            ) RETURNING id INTO v_preg_new;
+
+            -- Copiar respuestas: respuesta NO tiene columna compania
+            FOR r_resp IN
+                SELECT * FROM respuesta WHERE pregunta = r_preg.id
+            LOOP
+                INSERT INTO respuesta (
+                    pregunta, contenido, ind_correcta, peso,
+                    fecha_creacion, usuario_creacion
+                ) VALUES (
+                    v_preg_new, r_resp.contenido, r_resp.ind_correcta, r_resp.peso,
+                    NOW(), 1
+                );
+            END LOOP;
+
+            -- ControlUso: solo columna pregunta (PK)
+            INSERT INTO control_uso (pregunta, tiempo_uso, fecha_creacion)
+            VALUES (v_preg_new, 0, NOW());
+        END LOOP;
+    END LOOP;
 
     RETURN NEW;
 END;
@@ -880,10 +798,6 @@ CREATE TRIGGER trg_nueva_compania_copiar_evaluacion
 
 -- ══════════════════════════════════════════════════════════
 -- TRIGGER 6: trg_token_verificar_expiracion
--- Al insertar o actualizar un token, si ya está vencido
--- marca los intentos activos asociados como "Expirado".
--- En PostgreSQL se usa NOW() en lugar de GETDATE().
--- El JOIN con "inserted" se reemplaza con el acceso directo a NEW.
 -- ══════════════════════════════════════════════════════════
 CREATE OR REPLACE FUNCTION trg_fn_token_verificar_expiracion()
 RETURNS trigger
@@ -893,24 +807,15 @@ DECLARE
     v_estado_expirado INTEGER;
     v_estado_progreso INTEGER;
 BEGIN
-    -- Solo actuar si el token ya venció
-    IF NEW.fecha_expiracion >= NOW() THEN
-        RETURN NEW;
-    END IF;
+    IF NEW.fecha_expiracion >= NOW() THEN RETURN NEW; END IF;
 
     SELECT id INTO v_estado_expirado
-      FROM estado_intento
-     WHERE descripcion = 'Expirado'
-     LIMIT 1;
-
+      FROM estado_intento WHERE descripcion = 'Expirado' LIMIT 1;
     SELECT id INTO v_estado_progreso
-      FROM estado_intento
-     WHERE descripcion = 'En Progreso'
-     LIMIT 1;
+      FROM estado_intento WHERE descripcion = 'En Progreso' LIMIT 1;
 
     UPDATE intento
-       SET estado          = v_estado_expirado,
-           fecha_modificacion = NOW()
+       SET estado = v_estado_expirado, fecha_modificacion = NOW()
      WHERE postulacion = NEW.postulacion
        AND compania    = NEW.compania
        AND estado      = v_estado_progreso;

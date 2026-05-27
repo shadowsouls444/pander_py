@@ -3,7 +3,7 @@ from .models import (
     TipoDocumento, Candidato, DatosCandidato, AnexoCandidato,
     EstadoPostulacion, Postulacion, PostulacionToken,
 )
-from .models_vistas_sql import (
+from .models import (
     VCandidato, VPostulacion, VAnexoCandidato, VReportePostulacion,
 )
 

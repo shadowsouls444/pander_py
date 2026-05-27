@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import Compania, UnidadOrg
-from .models_vistas_sql import VCompania, VUnidadOrg
+from .models import VCompania, VUnidadOrg
  
 class CompaniaSerializer(serializers.ModelSerializer):
     class Meta:

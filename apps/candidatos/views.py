@@ -22,7 +22,7 @@ from .serializers import (TipoDocumentoSerializer, CandidatoSerializer,
     EstadoPostulacionSerializer, PostulacionSerializer, PostulacionTokenSerializer,
     VCandidatoSerializer, VPostulacionSerializer, VAnexoCandidatoSerializer,
     VReportePostulacionSerializer)
-from .models_vistas_sql import VCandidato, VPostulacion, VAnexoCandidato, VReportePostulacion
+from .models import VCandidato, VPostulacion, VAnexoCandidato, VReportePostulacion
 
 
 def _mail(to, subject, body):

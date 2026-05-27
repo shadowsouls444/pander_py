@@ -28,112 +28,97 @@ def insertar_modulos(apps, schema_editor):
         {
             "descripcion":     "Dashboard",
             "nombre_aplicacion": "/",
-            "icono":           "🏠",
+            "icono":           "",
             "orden":           1,
+            "ind_visible":     True,
+        },
+        {
+            "descripcion":     "Cargue de Información",
+            "nombre_aplicacion": "/importacion",
+            "icono":           "",
+            "orden":           2,
             "ind_visible":     True,
         },
         {
             "descripcion":     "Gestión de Compañías",
             "nombre_aplicacion": "/gestion-compania",
-            "icono":           "🏢",
-            "orden":           2,
+            "icono":           "",
+            "orden":           3,
             "ind_visible":     True,
         },
         {
             "descripcion":     "Gestión de Analistas",
             "nombre_aplicacion": "/gestion-analistas",
-            "icono":           "👔",
-            "orden":           3,
+            "icono":           "",
+            "orden":           4,
             "ind_visible":     True,
         },
         {
             "descripcion":     "Gestión de Usuarios",
             "nombre_aplicacion": "/gestion-usuarios",
-            "icono":           "👤",
-            "orden":           4,
+            "icono":           "",
+            "orden":           5,
             "ind_visible":     True,
         },
         {
             "descripcion":     "Gestión de Módulos",
             "nombre_aplicacion": "/gestion-modulos",
-            "icono":           "🧩",
-            "orden":           5,
+            "icono":           "",
+            "orden":           6,
             "ind_visible":     True,
         },
         {
             "descripcion":     "Gestión de Vacantes",
             "nombre_aplicacion": "/gestion-vacantes",
-            "icono":           "💼",
-            "orden":           6,
+            "icono":           "",
+            "orden":           7,
             "ind_visible":     True,
         },
         {
             "descripcion":     "Gestión de Candidatos",
             "nombre_aplicacion": "/gestion-candidatos",
-            "icono":           "🧑‍💼",
-            "orden":           7,
+            "icono":           "",
+            "orden":           8,
             "ind_visible":     True,
         },
         {
             "descripcion":     "Gestión de Postulaciones",
             "nombre_aplicacion": "/gestion-postulaciones",
-            "icono":           "📋",
-            "orden":           8,
+            "icono":           "",
+            "orden":           9,
             "ind_visible":     True,
         },
         {
             "descripcion":     "Evaluaciones",
             "nombre_aplicacion": "/evaluacion",
-            "icono":           "📊",
-            "orden":           9,
+            "icono":           "",
+            "orden":           10,
             "ind_visible":     True,
         },
         {
             "descripcion":     "Configuración Evaluaciones",
             "nombre_aplicacion": "/gestion-evaluaciones",
             "icono":           "",
-            "orden":           10,
+            "orden":           11,
             "ind_visible":     True,
         },
         {
             "descripcion":     "Configuración Roles",
             "nombre_aplicacion": "/gestion-roles",
             "icono":           "",
-            "orden":           11,
+            "orden":           12,
             "ind_visible":     True,
         },
         {
             "descripcion":     "Gestión Unidades",
             "nombre_aplicacion": "/gestion-unidades",
-            "icono":           "📊",
-            "orden":           12,
+            "icono":           "",
+            "orden":           13,
             "ind_visible":     True,
         },
     ]
 
-    # ── Módulos de API (ocultos en menú, para control de acceso) ──
-    modulos_api = [
-        # Empresa
-        {"descripcion": "API Compañías",        "nombre_aplicacion": "/api/empresa/companias/",   "orden": 100, "ind_visible": False},
-        {"descripcion": "API Unidades Org.",     "nombre_aplicacion": "/api/empresa/companias/*/unidades/", "orden": 101, "ind_visible": False},
-        # Acceso
-        {"descripcion": "API Roles",            "nombre_aplicacion": "/api/acceso/roles/",        "orden": 110, "ind_visible": False},
-        {"descripcion": "API Módulos",          "nombre_aplicacion": "/api/acceso/modulos/",      "orden": 111, "ind_visible": False},
-        {"descripcion": "API Analistas",        "nombre_aplicacion": "/api/acceso/companias/*/analistas/", "orden": 112, "ind_visible": False},
-        {"descripcion": "API Usuarios",         "nombre_aplicacion": "/api/acceso/companias/*/usuarios/",  "orden": 113, "ind_visible": False},
-        # Vacantes
-        {"descripcion": "API Vacantes",         "nombre_aplicacion": "/api/vacantes/companias/*/vacantes/", "orden": 120, "ind_visible": False},
-        # Candidatos
-        {"descripcion": "API Candidatos",       "nombre_aplicacion": "/api/candidatos/companias/*/candidatos/", "orden": 130, "ind_visible": False},
-        {"descripcion": "API Postulaciones",    "nombre_aplicacion": "/api/candidatos/companias/*/postulaciones/", "orden": 131, "ind_visible": False},
-        {"descripcion": "API Reporte RRHH",     "nombre_aplicacion": "/api/candidatos/companias/*/reporte-postulaciones/", "orden": 132, "ind_visible": False},
-        # Evaluación
-        {"descripcion": "API Evaluaciones",     "nombre_aplicacion": "/api/evaluacion/companias/*/evaluaciones/", "orden": 140, "ind_visible": False},
-        {"descripcion": "API Intentos",         "nombre_aplicacion": "/api/evaluacion/companias/*/intentos/",      "orden": 141, "ind_visible": False},
-        {"descripcion": "API Habilidades",      "nombre_aplicacion": "/api/evaluacion/habilidades/",               "orden": 142, "ind_visible": False},
-    ]
-
-    for datos in modulos_raiz + modulos_api:
+    for datos in modulos_raiz:
         Modulo.objects.create(
             modulo_padre     = None,
             descripcion      = datos["descripcion"],

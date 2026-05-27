@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import EstadoVacante, TipoContrato, Vacante
-from .models_vistas_sql import VVacante
+from .models import VVacante
  
 class EstadoVacanteSerializer(serializers.ModelSerializer):
     class Meta:

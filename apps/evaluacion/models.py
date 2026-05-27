@@ -1,73 +1,71 @@
 """
-MÓDULO: evaluacion
-MOTOR:  Microsoft SQL Server  (paquete: mssql-django)
-TABLAS: habilidad, pregunta, respuesta, control_uso,
-        evaluacion, evaluacion_habilidad, evaluacion_vacante,
-        estado_intento, intento, respuesta_candidato,
-        historial_habilidad_estim
+apps/evaluacion/models.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Modelos de tablas reales + vistas SQL en un único archivo,
+siguiendo el patrón del proyecto (empresa/models.py, acceso/models.py).
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-ARQUITECTURA DE DATOS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  BANCO GLOBAL (sin compania)
-    habilidad · pregunta · respuesta · control_uso
-    Construido y calibrado por el equipo del sistema.
-    No pertenece a ninguna empresa suscrita en particular.
+ESTRUCTURA FINAL (sin campo evaluacion en banco de ítems):
+  ── BANCO DE ÍTEMS ───────────────────────────────────────
+  Habilidad          → + compania (FK, pertenece a una compañía)
+  Pregunta           → habilidad (sin campo evaluacion directo)
+  Respuesta          → pregunta  (sin campo evaluacion directo)
+  ControlUso         → pregunta  (sin campo evaluacion directo)
+     La relación evaluacion es implícita:
+     pregunta → habilidad → evaluacion_habilidad → evaluacion
 
-  POR COMPAÑÍA (con compania)
-    evaluacion · evaluacion_habilidad · evaluacion_vacante
-    estado_intento · intento · respuesta_candidato
-    historial_habilidad_estim
+  ── EVALUACIONES ─────────────────────────────────────────
+  Evaluacion          → compania (1 activa por compañía, modo estándar)
+  EvaluacionHabilidad → pivote N:M Evaluacion × Habilidad
+  EvaluacionVacante   → asigna evaluacion a vacante específica
+                         (solo si compania.ind_evaluacion_vacante = TRUE)
+                         (solo 1 activa por (compania, vacante))
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TIPOS SQL SERVER relevantes en este módulo
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  FloatField   → float(53)   IEEE 754 doble precisión
-                 Usado en parámetros TRI y estimaciones θ.
-                 La aritmética de punto flotante es suficiente
-                 para psicometría; no se requiere decimal exacto.
+  ── PROCESO CANDIDATO ────────────────────────────────────
+  EstadoIntento, Intento, RespuestaCandidato, HistorialHabilidadEstim
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-POLÍTICA DE NULOS — campos de auditoría
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  fecha_creacion        NOT NULL   auto_now_add, siempre presente
-  usuario_creacion      NOT NULL   si hay usuario humano que registra
-                        NULL       si lo genera un proceso automático (CAT)
-  fecha_modificacion    NULL       None hasta la primera edición
-  usuario_modificacion  NULL       None hasta la primera edición
+  ── VISTAS SQL (managed=False) ───────────────────────────
+  VHabilidad, VPregunta, VEvaluacion, VIntento, VReportePostulacion
 """
-
 from django.db import models
 
 
 # ══════════════════════════════════════════════════════════════
-# BANCO GLOBAL DE ÍTEMS  (sin compania)
+# BANCO DE ÍTEMS
 # ══════════════════════════════════════════════════════════════
 
 class Habilidad(models.Model):
     """
-    Habilidad blanda evaluable. Entidad del banco psicométrico global.
+    Habilidad blanda evaluable.
+    Pertenece a una compañía específica (compania FK).
+    La compañía 0000 tiene el banco estándar que se copia
+    automáticamente a las demás compañías al crearlas.
 
     Parámetros TRI a nivel de habilidad (valores poblacionales base).
     Los parámetros definitivos calibrados por ítem se almacenan en Pregunta.
 
-      discriminacion : parámetro a — capacidad de diferenciar niveles de habilidad
-      dificultad     : parámetro b — nivel θ en que P(respuesta correcta) = 0.5
-      adivinabilidad : parámetro c — probabilidad de acertar al azar (piso)
-
-    No lleva usuario_creacion porque es gestionado por el equipo técnico
-    del sistema mediante procesos de calibración, no por analistas de empresa.
+    Nulos:
+      compania         → NULL  solo en banco legado pre-multitenant
+      usuario_creacion → NULL  proceso de calibración automática
     """
+    compania = models.ForeignKey(
+        "empresa.Compania",
+        on_delete=models.CASCADE,
+        db_column="compania",
+        related_name="habilidades",
+        null=True, blank=True,
+    )
     descripcion    = models.CharField(max_length=255)
     dificultad     = models.FloatField(default=0.0)
     discriminacion = models.FloatField(default=1.0)
     adivinabilidad = models.FloatField(default=0.0)
 
-    fecha_creacion     = models.DateTimeField(auto_now_add=True)
-    fecha_modificacion = models.DateTimeField(auto_now=True, null=True, blank=True)
+    fecha_creacion       = models.DateTimeField(auto_now_add=True)
+    fecha_modificacion   = models.DateTimeField(auto_now=True, null=True, blank=True)
+    usuario_creacion     = models.IntegerField(null=True, blank=True)
+    usuario_modificacion = models.IntegerField(null=True, blank=True)
 
     def __str__(self):
-        return f"Habilidad [{self.pk}]: {self.descripcion}"
+        return f"Habilidad [{self.pk}] C[{self.compania_id}]: {self.descripcion}"
 
     class Meta:
         db_table = "habilidad"
@@ -75,26 +73,25 @@ class Habilidad(models.Model):
 
 class Pregunta(models.Model):
     """
-    Ítem psicométrico del banco global.
+    Ítem psicométrico.
+    Pertenece a una habilidad (que a su vez pertenece a una compañía).
+    La relación a la evaluación es implícita:
+      pregunta → habilidad → evaluacion_habilidad → evaluacion
+    No lleva campo evaluacion directo para evitar redundancia.
 
-    Parámetros TRI calibrados por ítem específico:
-      criterio_a : discriminación — diferencia entre candidatos fuertes y débiles
-      criterio_b : dificultad    — nivel θ en que la pregunta es 50% probable acertar
-      criterio_c : adivinabilidad — probabilidad de acertar sin saber la respuesta
+    Parámetros TRI 3PL calibrados por ítem:
+      criterio_a : discriminación — diferencia entre niveles de habilidad
+      criterio_b : dificultad    — θ en que P(correcto) = 0.5
+      criterio_c : adivinabilidad — probabilidad de acertar al azar
 
-    ind_activa: desactiva ítems sin eliminarlos.
-      IMPORTANTE: nunca eliminar preguntas que tengan respuestas_candidato
-      asociadas; hacerlo rompe el histórico de intentos pasados.
-
-    No lleva usuario_creacion: gestionado por proceso de calibración.
-
-    Nulos: ningún campo adicional es nullable en esta entidad.
+    IMPORTANTE: nunca eliminar preguntas con respuestas_candidato asociadas;
+    hacerlo rompe el histórico de intentos pasados. Usar ind_activa=False.
     """
-    habilidad  = models.ForeignKey(
+    habilidad = models.ForeignKey(
         Habilidad,
         on_delete=models.PROTECT,
         db_column="habilidad",
-        related_name="preguntas"
+        related_name="preguntas",
     )
     contenido  = models.TextField()
     criterio_a = models.FloatField(default=1.0)
@@ -102,11 +99,13 @@ class Pregunta(models.Model):
     criterio_c = models.FloatField(default=0.0)
     ind_activa = models.BooleanField(default=True)
 
-    fecha_creacion     = models.DateTimeField(auto_now_add=True)
-    fecha_modificacion = models.DateTimeField(auto_now=True, null=True, blank=True)
+    fecha_creacion       = models.DateTimeField(auto_now_add=True)
+    fecha_modificacion   = models.DateTimeField(auto_now=True, null=True, blank=True)
+    usuario_creacion     = models.IntegerField(null=True, blank=True)
+    usuario_modificacion = models.IntegerField(null=True, blank=True)
 
     def __str__(self):
-        return f"Pregunta [{self.pk}] H[{self.habilidad}]: {self.contenido[:80]}"
+        return f"Pregunta [{self.pk}] H[{self.habilidad_id}]: {self.contenido[:80]}"
 
     class Meta:
         db_table = "pregunta"
@@ -114,35 +113,27 @@ class Pregunta(models.Model):
 
 class Respuesta(models.Model):
     """
-    Opciones de respuesta de un ítem del banco global.
-
-    ind_correcta: True en la única opción correcta del ítem.
-    peso:         Habilita corrección ponderada futura.
-                  0.0 = completamente incorrecta.
-                  1.0 = completamente correcta.
-                  Valores intermedios = corrección parcial (no activo en v1).
-
-    Para verificar si un candidato respondió correctamente:
-      respuesta_candidato.respuesta.ind_correcta == True
-
-    No lleva usuario_creacion: gestionado por proceso de calibración.
+    Opciones de respuesta de un ítem.
+    ind_correcta: True en la única opción correcta.
+    peso: habilita corrección ponderada (0.0=incorrecta, 1.0=correcta).
     """
     pregunta     = models.ForeignKey(
         Pregunta,
         on_delete=models.CASCADE,
         db_column="pregunta",
-        related_name="respuestas"
+        related_name="respuestas",
     )
     contenido    = models.TextField()
     ind_correcta = models.BooleanField(default=False)
     peso         = models.FloatField(default=0.0)
 
-    fecha_creacion     = models.DateTimeField(auto_now_add=True)
-    fecha_modificacion = models.DateTimeField(auto_now=True, null=True, blank=True)
+    fecha_creacion       = models.DateTimeField(auto_now_add=True)
+    fecha_modificacion   = models.DateTimeField(auto_now=True, null=True, blank=True)
+    usuario_creacion     = models.IntegerField(null=True, blank=True)
+    usuario_modificacion = models.IntegerField(null=True, blank=True)
 
     def __str__(self):
-        marca = " ✓" if self.ind_correcta else ""
-        return f"Respuesta [{self.pk}] P[{self.pregunta}]{marca}"
+        return f"Respuesta [{self.pk}] P[{self.pregunta_id}]{'✓' if self.ind_correcta else ''}"
 
     class Meta:
         db_table = "respuesta"
@@ -150,22 +141,19 @@ class Respuesta(models.Model):
 
 class ControlUso(models.Model):
     """
-    Monitorea la exposición global de cada ítem del banco.
-    Global (sin compania): el banco es compartido entre todas las empresas.
-
-    tiempo_uso:       número total de veces que el ítem ha sido presentado.
-    fecha_ultimo_uso: permite estrategias de rotación y descanso de ítems
-                      para evitar sobreexposición en el algoritmo CAT.
+    Monitorea la exposición de cada ítem en el motor CAT.
+    tiempo_uso:       número total de veces presentado.
+    fecha_ultimo_uso: estrategia de rotación y descanso de ítems.
 
     Nulos:
-      fecha_ultimo_uso → NULL  el ítem nunca ha sido presentado aún
+      fecha_ultimo_uso → NULL  ítem nunca presentado
     """
     pregunta = models.OneToOneField(
         Pregunta,
         on_delete=models.CASCADE,
         primary_key=True,
         db_column="pregunta",
-        related_name="control_uso"
+        related_name="control_uso",
     )
     tiempo_uso       = models.IntegerField(default=0)
     fecha_ultimo_uso = models.DateTimeField(null=True, blank=True)
@@ -174,7 +162,7 @@ class ControlUso(models.Model):
     fecha_modificacion = models.DateTimeField(auto_now=True, null=True, blank=True)
 
     def __str__(self):
-        return f"ControlUso P[{self.pregunta}]: {self.tiempo_uso} usos"
+        return f"ControlUso P[{self.pregunta_id}]: {self.tiempo_uso} usos"
 
     class Meta:
         db_table = "control_uso"
@@ -186,23 +174,19 @@ class ControlUso(models.Model):
 
 class Evaluacion(models.Model):
     """
-    Evaluación configurada por una compañía sobre el banco global.
-    id_interno: secuencial dentro de la compañía.
-
-    ind_activa: cuando Compania.ind_evaluacion_vacante=False,
-      el sistema selecciona la evaluación con ind_activa=True
-      como evaluación global. Solo debe existir UNA evaluación
-      activa por compañía en ese modo (validar en capa de negocio).
+    Evaluación configurada para una compañía.
+    Modo estándar (ind_evaluacion_vacante=FALSE):
+      → solo 1 activa por compañía (enforced por Python + trigger)
+    Modo por vacante (ind_evaluacion_vacante=TRUE):
+      → la evaluación se asigna por vacante en EvaluacionVacante
     """
     compania = models.ForeignKey(
         "empresa.Compania",
         on_delete=models.CASCADE,
         db_column="compania",
-        related_name="evaluaciones"
+        related_name="evaluaciones",
     )
-    id_interno  = models.IntegerField(
-        help_text="Identificador secuencial dentro de la compañía"
-    )
+    id_interno  = models.IntegerField()
     descripcion = models.CharField(max_length=255)
     ind_activa  = models.BooleanField(default=True)
 
@@ -212,7 +196,7 @@ class Evaluacion(models.Model):
     usuario_modificacion = models.IntegerField(null=True, blank=True)
 
     def __str__(self):
-        return f"Evaluacion [{self.compania}-{self.id_interno}]: {self.descripcion}"
+        return f"Evaluacion [{self.compania_id}-{self.id_interno}]: {self.descripcion}"
 
     class Meta:
         db_table        = "evaluacion"
@@ -221,31 +205,28 @@ class Evaluacion(models.Model):
 
 class EvaluacionHabilidad(models.Model):
     """
-    Pivote N:M entre Evaluacion (por compañía) y Habilidad (banco global).
-    Permite reutilizar habilidades del banco en múltiples evaluaciones
-    de distintas compañías sin duplicar el ítem psicométrico.
-
-    orden:       secuencia de presentación de la habilidad en la evaluación.
-    obligatoria: preparado para habilidades opcionales en versiones futuras.
-                 En v1 todas las habilidades son obligatorias (default=True).
+    Pivote N:M entre Evaluacion y Habilidad.
+    Define qué habilidades incluye cada evaluación y en qué orden.
+    unique_together garantiza que una habilidad no se asigne dos veces
+    a la misma evaluación dentro de la misma compañía.
     """
     compania = models.ForeignKey(
         "empresa.Compania",
         on_delete=models.CASCADE,
         db_column="compania",
-        related_name="evaluacion_habilidades"
+        related_name="evaluacion_habilidades",
     )
     evaluacion = models.ForeignKey(
         Evaluacion,
         on_delete=models.CASCADE,
         db_column="evaluacion",
-        related_name="habilidades"
+        related_name="habilidades",
     )
     habilidad = models.ForeignKey(
         Habilidad,
         on_delete=models.PROTECT,
         db_column="habilidad",
-        related_name="evaluaciones"
+        related_name="evaluaciones",
     )
     orden       = models.IntegerField(default=0)
     obligatoria = models.BooleanField(default=True)
@@ -254,12 +235,6 @@ class EvaluacionHabilidad(models.Model):
     usuario_creacion     = models.IntegerField()
     fecha_modificacion   = models.DateTimeField(auto_now=True, null=True, blank=True)
     usuario_modificacion = models.IntegerField(null=True, blank=True)
-
-    def __str__(self):
-        return (
-            f"EvalHabilidad: Eval[{self.compania}-{self.evaluacion}]"
-            f" → H[{self.habilidad}] orden {self.orden}"
-        )
 
     class Meta:
         db_table        = "evaluacion_habilidad"
@@ -270,38 +245,32 @@ class EvaluacionHabilidad(models.Model):
 class EvaluacionVacante(models.Model):
     """
     Asigna una evaluación específica a una vacante.
-    Alcance futuro: se activa cuando Compania.ind_evaluacion_vacante=True.
-
-    REGLA DE PRECEDENCIA (implementar en capa de servicio):
-      1. ind_evaluacion_vacante=True  → consultar esta tabla.
-      2. Sin registro activo          → fallback a Evaluacion con ind_activa=True.
-
-    ind_activa:   desactiva sin eliminar registros históricos.
-    fecha_inicio: desde cuándo aplica esta evaluación a la vacante.
-    fecha_fin:    hasta cuándo. NULL = vigencia indefinida.
+    Solo aplica cuando compania.ind_evaluacion_vacante = TRUE.
+    Regla: solo 1 asignación activa por (compania, vacante)
+           enforced por Python en EvaluacionVacanteList/Detail.
 
     Nulos:
-      descripcion  → NULL  nota opcional sobre la asignación
-      fecha_inicio → NULL  sin restricción de fecha de inicio
-      fecha_fin    → NULL  vigencia indefinida
+      descripcion  → NULL  texto libre opcional
+      fecha_inicio → NULL  sin restricción de vigencia
+      fecha_fin    → NULL  sin restricción de vigencia
     """
     compania = models.ForeignKey(
         "empresa.Compania",
         on_delete=models.CASCADE,
         db_column="compania",
-        related_name="evaluacion_vacantes"
+        related_name="evaluacion_vacantes",
     )
     vacante = models.ForeignKey(
         "vacantes.Vacante",
         on_delete=models.CASCADE,
         db_column="vacante",
-        related_name="evaluaciones_vacante"
+        related_name="evaluaciones_vacante",
     )
     evaluacion = models.ForeignKey(
         Evaluacion,
         on_delete=models.PROTECT,
         db_column="evaluacion",
-        related_name="vacantes_asignadas"
+        related_name="vacantes_asignadas",
     )
     descripcion  = models.CharField(max_length=255, null=True, blank=True)
     ind_activa   = models.BooleanField(default=True)
@@ -313,12 +282,6 @@ class EvaluacionVacante(models.Model):
     fecha_modificacion   = models.DateTimeField(auto_now=True, null=True, blank=True)
     usuario_modificacion = models.IntegerField(null=True, blank=True)
 
-    def __str__(self):
-        return (
-            f"EvalVacante: V[{self.compania}-{self.vacante}]"
-            f" → Eval[{self.evaluacion}]"
-        )
-
     class Meta:
         db_table        = "evaluacion_vacante"
         unique_together = [("compania", "vacante", "evaluacion")]
@@ -329,24 +292,11 @@ class EvaluacionVacante(models.Model):
 # ══════════════════════════════════════════════════════════════
 
 class EstadoIntento(models.Model):
-    """
-    Catálogo global de estados de un intento de evaluación.
-    Valores sugeridos de carga inicial:
-      1 → EN_PROGRESO
-      2 → COMPLETADO
-      3 → ABANDONADO
-      4 → EXPIRADO
-      5 → ANULADO
-    """
-    descripcion = models.CharField(max_length=100)
-
+    descripcion          = models.CharField(max_length=100)
     fecha_creacion       = models.DateTimeField(auto_now_add=True)
     usuario_creacion     = models.IntegerField()
     fecha_modificacion   = models.DateTimeField(auto_now=True, null=True, blank=True)
     usuario_modificacion = models.IntegerField(null=True, blank=True)
-
-    def __str__(self):
-        return f"EstadoIntento [{self.pk}]: {self.descripcion}"
 
     class Meta:
         db_table = "estado_intento"
@@ -356,59 +306,30 @@ class Intento(models.Model):
     """
     Sesión de evaluación de un candidato.
     id_interno: secuencial dentro de la compañía.
-
-    postulacion → trazabilidad al origen del intento (OBS-02 resuelto).
-    evaluacion  → identifica qué evaluación se aplica  (OBS-03 resuelto).
-    candidato   → acceso directo sin traversar postulacion (optimización).
-
-    habilidad_estim: estimación θ (theta) actual del algoritmo CAT.
-      Se actualiza tras cada respuesta del candidato.
-      Se consolida con el valor final al terminar el intento.
-    error_estandar: SE(θ) — precisión de la estimación actual.
-      El algoritmo CAT detiene la evaluación cuando SE < umbral definido.
-
-    Nulos:
-      habilidad_estim → NULL  None antes de la primera respuesta
-      error_estandar  → NULL  ídem
-      fecha_fin       → NULL  None mientras el intento está EN_PROGRESO
-      usuario_creacion → NULL el intento lo inicia el candidato vía token,
-                              sin intervención de analista
+    habilidad_estim: θ estimado actualizado después de cada respuesta.
+    error_estandar:  SE(θ) — precisión de la estimación CAT.
     """
     compania = models.ForeignKey(
-        "empresa.Compania",
-        on_delete=models.CASCADE,
-        db_column="compania",
-        related_name="intentos"
+        "empresa.Compania", on_delete=models.CASCADE,
+        db_column="compania", related_name="intentos",
     )
-    id_interno = models.IntegerField(
-        help_text="Identificador secuencial dentro de la compañía"
-    )
-
+    id_interno  = models.IntegerField()
     postulacion = models.ForeignKey(
-        "candidatos.Postulacion",
-        on_delete=models.PROTECT,
-        db_column="postulacion",
-        related_name="intentos"
+        "candidatos.Postulacion", on_delete=models.PROTECT,
+        db_column="postulacion", related_name="intentos",
     )
     candidato = models.ForeignKey(
-        "candidatos.Candidato",
-        on_delete=models.PROTECT,
-        db_column="candidato",
-        related_name="intentos"
+        "candidatos.Candidato", on_delete=models.PROTECT,
+        db_column="candidato", related_name="intentos",
     )
     evaluacion = models.ForeignKey(
-        Evaluacion,
-        on_delete=models.PROTECT,
-        db_column="evaluacion",
-        related_name="intentos"
+        Evaluacion, on_delete=models.PROTECT,
+        db_column="evaluacion", related_name="intentos",
     )
     estado = models.ForeignKey(
-        EstadoIntento,
-        on_delete=models.PROTECT,
-        db_column="estado",
-        related_name="intentos"
+        EstadoIntento, on_delete=models.PROTECT,
+        db_column="estado", related_name="intentos",
     )
-
     habilidad_estim = models.FloatField(null=True, blank=True)
     error_estandar  = models.FloatField(null=True, blank=True)
     fecha_inicio    = models.DateTimeField()
@@ -419,13 +340,6 @@ class Intento(models.Model):
     fecha_modificacion   = models.DateTimeField(auto_now=True, null=True, blank=True)
     usuario_modificacion = models.IntegerField(null=True, blank=True)
 
-    def __str__(self):
-        return (
-            f"Intento [{self.compania}-{self.id_interno}]"
-            f" C[{self.candidato}] Eval[{self.evaluacion}]"
-            f" Estado[{self.estado}]"
-        )
-
     class Meta:
         db_table        = "intento"
         unique_together = [("compania", "id_interno")]
@@ -433,42 +347,25 @@ class Intento(models.Model):
 
 class RespuestaCandidato(models.Model):
     """
-    Opción elegida por el candidato para cada pregunta en un intento.
-    Unicidad: (compania, intento, pregunta) — una respuesta por pregunta por intento.
-
-    Para verificar si fue correcta:
-        instancia.respuesta.ind_correcta == True
-
-    tiempo_respuesta: segundos entre presentación del ítem y respuesta.
-      Útil para el algoritmo CAT y análisis de comportamiento.
-
-    Nulos:
-      tiempo_respuesta → NULL  puede no capturarse con baja conectividad
-      usuario_creacion → NULL  generado automáticamente por el motor CAT
+    Registro de cada respuesta dada por el candidato en un intento.
+    unique_together evita duplicar respuestas a la misma pregunta
+    dentro del mismo intento (protección ante doble clic).
     """
     compania = models.ForeignKey(
-        "empresa.Compania",
-        on_delete=models.CASCADE,
-        db_column="compania",
-        related_name="respuestas_candidato"
+        "empresa.Compania", on_delete=models.CASCADE,
+        db_column="compania", related_name="respuestas_candidato",
     )
     intento = models.ForeignKey(
-        Intento,
-        on_delete=models.CASCADE,
-        db_column="intento",
-        related_name="respuestas_candidato"
+        Intento, on_delete=models.CASCADE,
+        db_column="intento", related_name="respuestas_candidato",
     )
     pregunta = models.ForeignKey(
-        Pregunta,
-        on_delete=models.PROTECT,
-        db_column="pregunta",
-        related_name="respuestas_candidato"
+        Pregunta, on_delete=models.PROTECT,
+        db_column="pregunta", related_name="respuestas_candidato",
     )
     respuesta = models.ForeignKey(
-        Respuesta,
-        on_delete=models.PROTECT,
-        db_column="respuesta",
-        related_name="selecciones_candidato"
+        Respuesta, on_delete=models.PROTECT,
+        db_column="respuesta", related_name="selecciones_candidato",
     )
     tiempo_respuesta = models.IntegerField(null=True, blank=True)
     fecha_respuesta  = models.DateTimeField()
@@ -478,12 +375,6 @@ class RespuestaCandidato(models.Model):
     fecha_modificacion   = models.DateTimeField(auto_now=True, null=True, blank=True)
     usuario_modificacion = models.IntegerField(null=True, blank=True)
 
-    def __str__(self):
-        return (
-            f"RespCandidato: I[{self.compania}-{self.intento}]"
-            f" P[{self.pregunta}] → R[{self.respuesta}]"
-        )
-
     class Meta:
         db_table        = "respuesta_candidato"
         unique_together = [("compania", "intento", "pregunta")]
@@ -491,30 +382,16 @@ class RespuestaCandidato(models.Model):
 
 class HistorialHabilidadEstim(models.Model):
     """
-    Registro cronológico paso a paso de la estimación θ durante el algoritmo CAT.
-    Permite:
-      - Reconstruir fielmente la curva de estimación de un candidato.
-      - Auditar el comportamiento del algoritmo ítem a ítem.
-      - Detectar comportamientos anómalos (respuestas demasiado rápidas, etc.).
-
-    paso:            número del ítem en la secuencia adaptativa (1, 2, 3...).
-    habilidad_estim: valor de θ estimado tras la respuesta de este paso.
-    error_estandar:  SE(θ) en este punto — disminuye con cada respuesta.
-
-    No lleva usuario_creacion ni usuario_modificacion:
-    es generado íntegramente por el motor CAT de forma automática.
+    Traza la evolución de θ y SE(θ) paso a paso durante el intento.
+    Permite auditar y visualizar la convergencia del motor CAT.
     """
     compania = models.ForeignKey(
-        "empresa.Compania",
-        on_delete=models.CASCADE,
-        db_column="compania",
-        related_name="historiales_habilidad"
+        "empresa.Compania", on_delete=models.CASCADE,
+        db_column="compania", related_name="historiales_habilidad",
     )
     intento = models.ForeignKey(
-        Intento,
-        on_delete=models.CASCADE,
-        db_column="intento",
-        related_name="historial_habilidad"
+        Intento, on_delete=models.CASCADE,
+        db_column="intento", related_name="historial_habilidad",
     )
     habilidad_estim = models.FloatField()
     error_estandar  = models.FloatField()
@@ -523,12 +400,141 @@ class HistorialHabilidadEstim(models.Model):
     fecha_creacion     = models.DateTimeField(auto_now_add=True)
     fecha_modificacion = models.DateTimeField(auto_now=True, null=True, blank=True)
 
-    def __str__(self):
-        return (
-            f"Historial [{self.pk}] I[{self.intento}]"
-            f" Paso {self.paso}: θ={self.habilidad_estim:.4f}"
-        )
-
     class Meta:
         db_table = "historial_habilidad_estim"
         ordering = ["intento", "paso"]
+
+
+# ══════════════════════════════════════════════════════════════
+# VISTAS SQL (managed=False — solo lectura, sin migraciones DDL)
+# ══════════════════════════════════════════════════════════════
+
+class VHabilidad(models.Model):
+    """
+    Vista v_habilidad — banco de habilidades con métricas.
+    La vista SQL incluye compania_id para filtrado por compañía.
+    """
+    compania_id              = models.IntegerField()
+    descripcion              = models.CharField(max_length=255)
+    dificultad               = models.FloatField()
+    discriminacion           = models.FloatField()
+    adivinabilidad           = models.FloatField()
+    total_preguntas_activas  = models.IntegerField()
+    total_preguntas          = models.IntegerField()
+    fecha_creacion           = models.DateTimeField()
+    fecha_modificacion       = models.DateTimeField(null=True)
+
+    class Meta:
+        managed  = False
+        db_table = "v_habilidad"
+
+
+class VPregunta(models.Model):
+    """
+    Vista v_pregunta — ítems con métricas de uso.
+    La vista SQL expone: p.habilidad AS habilidad_id
+    """
+    habilidad_id          = models.IntegerField()
+    habilidad_descripcion = models.CharField(max_length=255)
+    contenido             = models.TextField()
+    criterio_a            = models.FloatField()
+    criterio_b            = models.FloatField()
+    criterio_c            = models.FloatField()
+    ind_activa            = models.BooleanField()
+    total_opciones        = models.IntegerField()
+    tiempo_uso            = models.IntegerField(null=True)
+    fecha_ultimo_uso      = models.DateTimeField(null=True)
+    fecha_creacion        = models.DateTimeField()
+    fecha_modificacion    = models.DateTimeField(null=True)
+
+    class Meta:
+        managed  = False
+        db_table = "v_pregunta"
+
+
+class VEvaluacion(models.Model):
+    """
+    Vista v_evaluacion — evaluaciones con conteo de habilidades.
+    La vista SQL expone: e.compania AS compania_id
+    """
+    compania_id          = models.IntegerField()
+    compania_descripcion = models.CharField(max_length=255)
+    id_interno           = models.IntegerField()
+    descripcion          = models.CharField(max_length=255)
+    ind_activa           = models.BooleanField()
+    total_habilidades    = models.IntegerField()
+    fecha_creacion       = models.DateTimeField()
+    usuario_creacion     = models.IntegerField()
+    fecha_modificacion   = models.DateTimeField(null=True)
+    usuario_modificacion = models.IntegerField(null=True)
+
+    class Meta:
+        managed  = False
+        db_table = "v_evaluacion"
+
+
+class VIntento(models.Model):
+    """
+    Vista v_intento — intentos con información desnormalizada.
+    La vista SQL expone FKs como _id:
+      i.compania    AS compania_id
+      i.postulacion AS postulacion_id
+      i.candidato   AS candidato_id
+      i.evaluacion  AS evaluacion_id
+      i.estado      AS estado_id
+    """
+    compania_id               = models.IntegerField()
+    compania_descripcion      = models.CharField(max_length=255)
+    id_interno                = models.IntegerField()
+    postulacion_id            = models.IntegerField()
+    candidato_id              = models.IntegerField()
+    candidato_nombre_completo = models.CharField(max_length=400, null=True)
+    evaluacion_id             = models.IntegerField()
+    evaluacion_descripcion    = models.CharField(max_length=255)
+    estado_id                 = models.IntegerField()
+    estado_descripcion        = models.CharField(max_length=100)
+    habilidad_estim           = models.FloatField(null=True)
+    error_estandar            = models.FloatField(null=True)
+    fecha_inicio              = models.DateTimeField()
+    fecha_fin                 = models.DateTimeField(null=True)
+    duracion_segundos         = models.IntegerField(null=True)
+    fecha_creacion            = models.DateTimeField()
+    usuario_creacion          = models.IntegerField(null=True)
+    fecha_modificacion        = models.DateTimeField(null=True)
+    usuario_modificacion      = models.IntegerField(null=True)
+
+    class Meta:
+        managed  = False
+        db_table = "v_intento"
+
+
+class VReportePostulacion(models.Model):
+    """
+    Vista v_reporte_postulacion — reporte ejecutivo de RRHH.
+    Combina datos de postulacion, candidato, vacante, intento y decisión.
+    La vista SQL expone: p.compania AS compania_id
+    Solo lectura. Sin campos de auditoría (es una vista de reporte).
+    """
+    compania_id               = models.IntegerField()
+    compania                  = models.CharField(max_length=255)
+    postulacion_id            = models.IntegerField()
+    fecha_postulacion         = models.DateTimeField()
+    vacante_id                = models.IntegerField()
+    vacante                   = models.TextField()
+    unidad                    = models.CharField(max_length=255)
+    candidato_nombre_completo = models.CharField(max_length=400, null=True)
+    candidato_documento       = models.CharField(max_length=30, null=True)
+    candidato_email           = models.EmailField(max_length=150, null=True)
+    candidato_telefono        = models.CharField(max_length=20, null=True)
+    estado_postulacion        = models.CharField(max_length=100)
+    theta_final               = models.FloatField(null=True)
+    error_estandar_final      = models.FloatField(null=True)
+    estado_intento            = models.CharField(max_length=100, null=True)
+    intento_inicio            = models.DateTimeField(null=True)
+    intento_fin               = models.DateTimeField(null=True)
+    duracion_minutos          = models.IntegerField(null=True)
+    decision                  = models.CharField(max_length=20)
+
+    class Meta:
+        managed  = False
+        db_table = "v_reporte_postulacion"

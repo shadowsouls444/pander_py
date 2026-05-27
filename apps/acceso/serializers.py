@@ -1,7 +1,7 @@
 import hashlib
 from rest_framework import serializers
 from .models import Rol, Modulo, RolModulo, Analista, Usuario
-from .models_vistas_sql import VRol, VModulo, VAnalista, VUsuario
+from .models import VRol, VModulo, VAnalista, VUsuario
 
 
 class RolSerializer(serializers.ModelSerializer):
