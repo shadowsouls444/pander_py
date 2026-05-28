@@ -109,7 +109,10 @@ class ImportarCompaniasView(APIView):
     def _importar(rows, compania_id, usuario_id, **kw):
         from django.utils import timezone
         from apps.empresa.models import Compania
-        from apps.empresa.views import _copiar_analistas_y_superusuarios
+        from apps.empresa.views import (
+            _copiar_configuracion_estandar,
+            _copiar_analistas_y_superusuarios,
+        )
 
         creados = 0
         for r in rows:
@@ -124,8 +127,9 @@ class ImportarCompaniasView(APIView):
                 ind_evaluacion_vacante = r.get("ind_evaluacion_vacante", "FALSE").upper() == "TRUE",
                 usuario_creacion       = usuario_id,
             )
-            # El trigger SQL copia automáticamente la evaluación estándar.
-            # Python copia analistas y superusuarios de la compañía 0000.
+            # Copiar evaluación estándar completa (habilidades, preguntas, respuestas, control_uso)
+            _copiar_configuracion_estandar(nueva, uid=usuario_id)
+            # Copiar analistas y superusuarios de la compañía 0000
             _copiar_analistas_y_superusuarios(nueva, uid=usuario_id)
             creados += 1
         return creados

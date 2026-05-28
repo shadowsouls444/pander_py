@@ -1,27 +1,32 @@
 """
-apps/empresa/views.py — v9
-FIX #2 DEFINITIVO: bloque Python de CompaniaList.post() ahora copia
-  - Evaluacion
-  - EvaluacionHabilidad
-  - Habilidades (con compania = nueva)
-  - Preguntas (con habilidad mapeada a la nueva)
-  - Respuestas (con pregunta mapeada a la nueva)
-  - ControlUso (con pregunta mapeada a la nueva)
-  - Analistas y superusuarios de la compañía 0000
+apps/empresa/views.py — v12
+Nueva funcionalidad:
+  CompaniaDetail.delete():
+    - Bloquea eliminación de la compañía nit='0000' (sistema)
+    - Cuenta los registros relacionados antes de eliminar
+    - Registra un snapshot en CompaniaEliminada (auditoría)
+    - Ejecuta la eliminación en cascada con db.transaction.atomic
+    - Devuelve un resumen del impacto
 
-El trigger SQL (trg_fn_nueva_compania_copiar_evaluacion) tiene NIT '00000'
-y nunca se dispara correctamente → la lógica Python es la fuente de verdad.
-Para evitar duplicación: el trigger SQL debe DESACTIVARSE o corregirse
-(instrucción al final de este archivo).
+  CompaniaEliminadaList:
+    - GET /api/empresa/companias/eliminadas/  → historial de auditoría
 """
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Compania, UnidadOrg
-from .serializers import CompaniaSerializer, UnidadOrgSerializer, VCompaniaSerializer, VUnidadOrgSerializer
-from .models import VCompania, VUnidadOrg
+from .models import Compania, UnidadOrg, CompaniaEliminada, VCompania, VUnidadOrg
+from .serializers import (
+    CompaniaSerializer, UnidadOrgSerializer,
+    VCompaniaSerializer, VUnidadOrgSerializer,
+)
+
+
+# ─────────────────────────────────────────────────────────────
+# COMPAÑÍAS
+# ─────────────────────────────────────────────────────────────
 
 class CompaniaList(APIView):
     def get(self, request):
@@ -34,10 +39,7 @@ class CompaniaList(APIView):
         nueva = s.save()
         uid   = int(request.data.get("usuario_creacion") or 1)
 
-        # Copiar configuración estándar completa de la compañía 0000
         _copiar_configuracion_estandar(nueva, uid)
-
-        # Copiar analistas y superusuarios de la compañía 0000
         _copiar_analistas_y_superusuarios(nueva, uid)
 
         return Response(CompaniaSerializer(nueva).data, status=201)
@@ -58,9 +60,111 @@ class CompaniaDetail(APIView):
         return Response(s.errors, status=400)
 
     def delete(self, request, id):
-        get_object_or_404(Compania, id=id).delete()
-        return Response({"message": "Compañía eliminada."})
+        """
+        Eliminación controlada de una compañía:
+          1. Bloquea eliminación de la compañía sistema (nit='0000')
+          2. Cuenta registros relacionados (para auditoría y confirmación)
+          3. Requiere confirmación explícita: ?confirmar=true
+          4. Registra snapshot en CompaniaEliminada antes de eliminar
+          5. Ejecuta DELETE en cascada (Django CASCADE + app layer)
+          6. Devuelve resumen del impacto
+        """
+        comp = get_object_or_404(Compania, id=id)
 
+        # Bloquear eliminación de la compañía del sistema
+        if comp.nit == "0000":
+            return Response({
+                "detail": "La compañía estándar del sistema (NIT='0000') no puede eliminarse."
+            }, status=403)
+
+        # Contar registros relacionados
+        conteos = _contar_relacionados(comp)
+
+        # Si no viene ?confirmar=true, devolver resumen sin eliminar
+        if request.query_params.get("confirmar") != "true":
+            return Response({
+                "detail": (
+                    "Esta operación eliminará la compañía y TODOS sus datos. "
+                    "Llama de nuevo con ?confirmar=true para confirmar."
+                ),
+                "compania":  {"id": comp.id, "descripcion": comp.descripcion, "nit": comp.nit},
+                "impacto":   conteos,
+                "advertencia": (
+                    "Esta acción es IRREVERSIBLE. "
+                    "Se registrará en la auditoría de compañías eliminadas."
+                ),
+            }, status=200)
+
+        uid = int(request.query_params.get("usuario_id") or
+                  request.data.get("usuario_id") or 1)
+
+        # Ejecutar eliminación con transacción atómica
+        with transaction.atomic():
+            # Registrar auditoría ANTES de eliminar
+            CompaniaEliminada.objects.create(
+                compania_id                = comp.id,
+                descripcion                = comp.descripcion,
+                nit                        = comp.nit,
+                objeto_social              = comp.objeto_social,
+                representante_legal        = comp.representante_legal,
+                direccion                  = comp.direccion,
+                telefono                   = comp.telefono,
+                ind_activa                 = comp.ind_activa,
+                ind_evaluacion_vacante     = comp.ind_evaluacion_vacante,
+                fecha_creacion_original    = comp.fecha_creacion,
+                usuario_creacion_original  = comp.usuario_creacion,
+                fecha_eliminacion          = timezone.now(),
+                usuario_eliminacion        = uid,
+                **conteos,
+            )
+
+            # Eliminar en cascada (Django CASCADE maneja las FK)
+            # El orden aquí asegura integridad para relaciones sin CASCADE
+            _eliminar_datos_compania(comp)
+
+            # Eliminar la compañía
+            comp.delete()
+
+        return Response({
+            "detail":  f"Compañía '{comp.descripcion}' (NIT: {comp.nit}) eliminada correctamente.",
+            "impacto": conteos,
+            "auditoria": "Registro guardado en compania_eliminada.",
+        }, status=200)
+
+
+class CompaniaEliminadaList(APIView):
+    """GET /api/empresa/companias/eliminadas/ → historial de auditoría."""
+    def get(self, request):
+        qs = CompaniaEliminada.objects.all()
+        return Response([{
+            "id":                  ce.id,
+            "compania_id":         ce.compania_id,
+            "descripcion":         ce.descripcion,
+            "nit":                 ce.nit,
+            "ind_activa":          ce.ind_activa,
+            "ind_evaluacion_vacante": ce.ind_evaluacion_vacante,
+            "fecha_creacion_original":   ce.fecha_creacion_original,
+            "usuario_creacion_original": ce.usuario_creacion_original,
+            "fecha_eliminacion":   ce.fecha_eliminacion,
+            "usuario_eliminacion": ce.usuario_eliminacion,
+            "impacto": {
+                "usuarios":     ce.total_usuarios_eliminados,
+                "analistas":    ce.total_analistas_eliminados,
+                "unidades":     ce.total_unidades_eliminadas,
+                "vacantes":     ce.total_vacantes_eliminadas,
+                "candidatos":   ce.total_candidatos_eliminados,
+                "postulaciones":ce.total_postulaciones_eliminadas,
+                "evaluaciones": ce.total_evaluaciones_eliminadas,
+                "habilidades":  ce.total_habilidades_eliminadas,
+                "preguntas":    ce.total_preguntas_eliminadas,
+                "intentos":     ce.total_intentos_eliminados,
+            },
+        } for ce in qs])
+
+
+# ─────────────────────────────────────────────────────────────
+# UNIDADES
+# ─────────────────────────────────────────────────────────────
 
 class UnidadOrgList(APIView):
     def get(self, request, compania):
@@ -103,6 +207,10 @@ class UnidadOrgDetail(APIView):
         return Response({"message": "Unidad eliminada."})
 
 
+# ─────────────────────────────────────────────────────────────
+# VISTAS SQL
+# ─────────────────────────────────────────────────────────────
+
 class VCompaniaListView(APIView):
     def get(self, request):
         q  = request.query_params.get("q")
@@ -112,28 +220,97 @@ class VCompaniaListView(APIView):
         return Response(VCompaniaSerializer(qs, many=True).data)
 
 
+class VCompaniaDetailView(APIView):
+    def get(self, request, id):
+        return Response(VCompaniaSerializer(
+            get_object_or_404(VCompania, id=id)).data)
+
+
 class VUnidadOrgListView(APIView):
     def get(self, request, compania):
         return Response(VUnidadOrgSerializer(
             VUnidadOrg.objects.filter(compania_id=compania), many=True).data)
 
 
-# ════════════════════════════════════════════════════════════════
-# HELPERS — copia de configuración estándar
-# ════════════════════════════════════════════════════════════════
+class VUnidadOrgDetailView(APIView):
+    def get(self, request, compania, id):
+        return Response(VUnidadOrgSerializer(
+            get_object_or_404(VUnidadOrg, id=id, compania_id=compania)).data)
+
+
+# ─────────────────────────────────────────────────────────────
+# HELPERS PRIVADOS
+# ─────────────────────────────────────────────────────────────
+
+def _contar_relacionados(comp: Compania) -> dict:
+    """Cuenta los registros de cada tabla relacionada antes de eliminar."""
+    from apps.acceso.models    import Usuario, Analista
+    from apps.vacantes.models  import Vacante
+    from apps.candidatos.models import Candidato, Postulacion
+    from apps.evaluacion.models import (
+        Evaluacion, Habilidad, Pregunta, Intento,
+    )
+
+    return {
+        "total_usuarios_eliminados":      Usuario.objects.filter(compania=comp).count(),
+        "total_analistas_eliminados":     Analista.objects.filter(compania=comp).count(),
+        "total_unidades_eliminadas":      comp.unidades.count(),
+        "total_vacantes_eliminadas":      Vacante.objects.filter(compania=comp).count(),
+        "total_candidatos_eliminados":    Candidato.objects.filter(compania=comp).count(),
+        "total_postulaciones_eliminadas": Postulacion.objects.filter(compania=comp).count(),
+        "total_evaluaciones_eliminadas":  Evaluacion.objects.filter(compania=comp).count(),
+        "total_habilidades_eliminadas":   Habilidad.objects.filter(compania=comp).count(),
+        "total_preguntas_eliminadas":     Pregunta.objects.filter(
+            habilidad__compania=comp).count(),
+        "total_intentos_eliminados":      Intento.objects.filter(compania=comp).count(),
+    }
+
+
+def _eliminar_datos_compania(comp: Compania) -> None:
+    """
+    Eliminación explícita en orden para evitar conflictos de FK
+    en tablas donde Django no tiene CASCADE declarado.
+    Las FKs con on_delete=CASCADE se resuelven solas con el comp.delete().
+    Este bloque asegura que tablas sin CASCADE directo también se limpien.
+    """
+    from apps.evaluacion.models import (
+        HistorialHabilidadEstim, RespuestaCandidato, Intento,
+        EvaluacionHabilidad, EvaluacionVacante,
+    )
+    from apps.candidatos.models import PostulacionToken
+
+    # 1. Historial de estimaciones (depende de intento)
+    HistorialHabilidadEstim.objects.filter(compania=comp).delete()
+
+    # 2. Respuestas del candidato (depende de intento)
+    RespuestaCandidato.objects.filter(compania=comp).delete()
+
+    # 3. Tokens de postulación (depende de postulacion)
+    PostulacionToken.objects.filter(compania=comp).delete()
+
+    # 4. Intentos
+    Intento.objects.filter(compania=comp).delete()
+
+    # 5. EvaluacionHabilidad y EvaluacionVacante (dependen de evaluacion)
+    EvaluacionHabilidad.objects.filter(compania=comp).delete()
+    EvaluacionVacante.objects.filter(compania=comp).delete()
+
+    # El resto (Evaluacion, Habilidad → Pregunta → Respuesta, ControlUso,
+    # Candidato → DatosCandidato, Postulacion, Vacante, UnidadOrg,
+    # Usuario, Analista) se eliminan en cascada con comp.delete()
+
+
+# ─────────────────────────────────────────────────────────────
+# HELPERS PARA COPIA AL CREAR COMPAÑÍA
+# ─────────────────────────────────────────────────────────────
 
 def _copiar_configuracion_estandar(nueva_compania: Compania, uid: int = 1):
     """
-    Copia desde la compañía nit='0000' a nueva_compania:
-      - Evaluacion (1 copia de la activa)
-      - Habilidades (con compania = nueva_compania)
-      - EvaluacionHabilidad (mapeando a las nuevas habilidades)
-      - Preguntas (por habilidad, sin campo evaluacion)
-      - Respuestas (por pregunta)
-      - ControlUso (por pregunta)
+    Copia desde la compañía nit='0000':
+      Evaluacion → EvaluacionHabilidad → Habilidades → Preguntas → Respuestas → ControlUso
 
-    Solo copia si nueva_compania no tiene evaluaciones ya.
-    (Evita duplicación si el trigger SQL también se ejecutó.)
+    Guardia definitiva: verifica HABILIDADES PROPIAS de la nueva compañía.
+    Limpia el estado incompleto dejado por el trigger SQL antes de copiar.
     """
     try:
         from apps.evaluacion.models import (
@@ -152,42 +329,42 @@ def _copiar_configuracion_estandar(nueva_compania: Compania, uid: int = 1):
         if not eval_std:
             return
 
-        # Guardia anti-duplicación: si ya tiene evaluaciones, salir
-        if Evaluacion.objects.filter(compania=nueva_compania).exists():
+        # Guardia: si ya hay habilidades propias → copia completa → salir
+        if Habilidad.objects.filter(compania=nueva_compania).exists():
             return
 
-        # 1. Crear evaluación espejo
-        n_eval = Evaluacion.objects.filter(compania=nueva_compania).count() + 1
+        # Limpiar estado incompleto del trigger SQL
+        # (creó EvaluacionHabilidad apuntando a habilidades de 0000)
+        EvaluacionHabilidad.objects.filter(compania=nueva_compania).delete()
+        Evaluacion.objects.filter(compania=nueva_compania).delete()
+
+        # Crear evaluación espejo
         nueva_eval = Evaluacion.objects.create(
             compania         = nueva_compania,
-            id_interno       = n_eval,
+            id_interno       = 1,
             descripcion      = eval_std.descripcion,
             ind_activa       = True,
             usuario_creacion = uid,
             fecha_creacion   = now,
         )
 
-        # 2. Copiar habilidades (con compania = nueva)
-        habilidades_std = EvaluacionHabilidad.objects.filter(
+        # Copiar habilidades + preguntas + respuestas + control_uso
+        for eh in EvaluacionHabilidad.objects.filter(
             compania=comp_std, evaluacion=eval_std
-        ).select_related("habilidad").order_by("orden")
+        ).select_related("habilidad").order_by("orden"):
 
-        mapa_habilidad = {}  # id_original → obj_nuevo
+            h_std = eh.habilidad
 
-        for eh in habilidades_std:
-            h_std   = eh.habilidad
             h_nueva = Habilidad.objects.create(
-                compania       = nueva_compania,
-                descripcion    = h_std.descripcion,
-                dificultad     = h_std.dificultad,
-                discriminacion = h_std.discriminacion,
-                adivinabilidad = h_std.adivinabilidad,
-                fecha_creacion = now,
+                compania         = nueva_compania,
+                descripcion      = h_std.descripcion,
+                dificultad       = h_std.dificultad,
+                discriminacion   = h_std.discriminacion,
+                adivinabilidad   = h_std.adivinabilidad,
+                fecha_creacion   = now,
                 usuario_creacion = uid,
             )
-            mapa_habilidad[h_std.id] = h_nueva
 
-            # EvaluacionHabilidad con nueva habilidad
             EvaluacionHabilidad.objects.create(
                 compania         = nueva_compania,
                 evaluacion       = nueva_eval,
@@ -198,47 +375,37 @@ def _copiar_configuracion_estandar(nueva_compania: Compania, uid: int = 1):
                 fecha_creacion   = now,
             )
 
-            # 3. Copiar preguntas de esta habilidad
             for preg_std in Pregunta.objects.filter(habilidad=h_std, ind_activa=True):
                 preg_nueva = Pregunta.objects.create(
-                    habilidad    = h_nueva,
-                    contenido    = preg_std.contenido,
-                    criterio_a   = preg_std.criterio_a,
-                    criterio_b   = preg_std.criterio_b,
-                    criterio_c   = preg_std.criterio_c,
-                    ind_activa   = True,
-                    fecha_creacion = now,
+                    habilidad        = h_nueva,
+                    contenido        = preg_std.contenido,
+                    criterio_a       = preg_std.criterio_a,
+                    criterio_b       = preg_std.criterio_b,
+                    criterio_c       = preg_std.criterio_c,
+                    ind_activa       = True,
+                    fecha_creacion   = now,
                     usuario_creacion = uid,
                 )
-
-                # 4. Copiar respuestas
                 for resp_std in Respuesta.objects.filter(pregunta=preg_std):
                     Respuesta.objects.create(
-                        pregunta     = preg_nueva,
-                        contenido    = resp_std.contenido,
-                        ind_correcta = resp_std.ind_correcta,
-                        peso         = resp_std.peso,
-                        fecha_creacion = now,
+                        pregunta         = preg_nueva,
+                        contenido        = resp_std.contenido,
+                        ind_correcta     = resp_std.ind_correcta,
+                        peso             = resp_std.peso,
+                        fecha_creacion   = now,
                         usuario_creacion = uid,
                     )
-
-                # 5. Control de uso
                 ControlUso.objects.get_or_create(
                     pregunta=preg_nueva,
                     defaults={"tiempo_uso": 0, "fecha_creacion": now},
                 )
-
-    except Exception as e:
-        # Loguear pero no fallar la creación de la compañía
-        import traceback; traceback.print_exc()
+    except Exception:
+        import traceback
+        traceback.print_exc()
 
 
 def _copiar_analistas_y_superusuarios(nueva_compania: Compania, uid: int = 1):
-    """
-    Copia desde la compañía nit='0000':
-      - Todos los analistas
-      - Todos los usuarios con ind_super_usuario=TRUE
-    """
+    """Copia analistas y usuarios superusuario de la compañía nit='0000'."""
     try:
         from apps.acceso.models import Analista, Usuario
         now = timezone.now()
@@ -287,20 +454,5 @@ def _copiar_analistas_y_superusuarios(nueva_compania: Compania, uid: int = 1):
                 fecha_creacion    = now,
             )
     except Exception:
-        import traceback; traceback.print_exc()
-
-
-# ════════════════════════════════════════════════════════════════
-# NOTA IMPORTANTE SOBRE EL TRIGGER SQL
-# ════════════════════════════════════════════════════════════════
-# El trigger trg_fn_nueva_compania_copiar_evaluacion tiene NIT '00000'
-# (5 ceros) y nunca encuentra la compañía estándar (NIT='0000').
-# Por eso la lógica Python es la fuente de verdad.
-#
-# Para evitar duplicación futura si el trigger se corrige:
-# La guardia `if Evaluacion.objects.filter(compania=nueva_compania).exists(): return`
-# en _copiar_configuracion_estandar() previene doble copia.
-#
-# Para deshabilitar el trigger SQL definitivamente, ejecutar en PostgreSQL:
-#   DROP TRIGGER IF EXISTS trg_nueva_compania_copiar_evaluacion ON compania;
-# ════════════════════════════════════════════════════════════════
+        import traceback
+        traceback.print_exc()

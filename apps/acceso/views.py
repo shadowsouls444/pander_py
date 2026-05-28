@@ -385,3 +385,65 @@ class UsuarioDetail(APIView):
         return Response(s.errors, status=400)
     def delete(self, request, compania, id):
         self._get(compania, id).delete(); return Response({"message": "Eliminado."})
+
+
+# ─────────────────────────────────────────────────────────────
+# CAMBIO DE CONTRASEÑA (por email — sin OTP)
+# ─────────────────────────────────────────────────────────────
+
+class CambiarContrasenaView(APIView):
+    """
+    POST /api/acceso/auth/cambiar-contrasena/
+
+    Permite cambiar la contraseña de un usuario identificado por email.
+    Si el mismo email existe en varias compañías, actualiza en todas.
+
+    Body JSON:
+      email        : correo del usuario
+      pwd_actual   : contraseña actual (verificación de identidad)
+      nueva_pwd    : nueva contraseña (mínimo 8 caracteres)
+      confirmar_pwd: repetición de la nueva contraseña
+    """
+    def post(self, request):
+        email         = (request.data.get("email")         or "").strip().lower()
+        pwd_actual    = (request.data.get("pwd_actual")    or "")
+        nueva_pwd     = (request.data.get("nueva_pwd")     or "")
+        confirmar_pwd = (request.data.get("confirmar_pwd") or "")
+
+        if not email:
+            return Response({"detail": "El correo es obligatorio."}, status=400)
+        if not pwd_actual:
+            return Response({"detail": "La contraseña actual es obligatoria."}, status=400)
+        if not nueva_pwd:
+            return Response({"detail": "La nueva contraseña es obligatoria."}, status=400)
+        if len(nueva_pwd) < 8:
+            return Response({"detail": "La nueva contraseña debe tener mínimo 8 caracteres."}, status=400)
+        if nueva_pwd != confirmar_pwd:
+            return Response({"detail": "La nueva contraseña y su confirmación no coinciden."}, status=400)
+        if nueva_pwd == pwd_actual:
+            return Response({"detail": "La nueva contraseña debe ser diferente a la actual."}, status=400)
+
+        # Buscar usuarios activos con ese email
+        usuarios = list(Usuario.objects.filter(email__iexact=email, ind_activo=True))
+        if not usuarios:
+            return Response({"detail": "No se encontró ningún usuario activo con ese correo."}, status=404)
+
+        # Verificar contraseña actual en al menos un usuario
+        pwd_actual_hash = _hash(pwd_actual)
+        if not any(u.pwd == pwd_actual_hash for u in usuarios):
+            return Response({"detail": "La contraseña actual es incorrecta."}, status=401)
+
+        # Actualizar en todos los usuarios con ese email
+        nueva_pwd_hash = _hash(nueva_pwd)
+        actualizados = Usuario.objects.filter(
+            email__iexact=email, ind_activo=True
+        ).update(pwd=nueva_pwd_hash)
+
+        return Response({
+            "detail":       "Contraseña actualizada correctamente.",
+            "actualizados": actualizados,
+            "message": (
+                f"Se actualizó la contraseña en {actualizados} "
+                f"cuenta(s) asociada(s) al correo {email}."
+            ),
+        })

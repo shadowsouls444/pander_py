@@ -6,7 +6,8 @@ urlpatterns = [
     path("auth/login/",            views.LoginView.as_view(),               name="auth-login"),
     path("auth/reset-request/",    views.ResetPasswordRequestView.as_view(), name="auth-reset-request"),
     path("auth/reset-confirm/",    views.ResetPasswordConfirmView.as_view(), name="auth-reset-confirm"),
-    path("auth/cambiar-compania/", views.CambiarCompaniaView.as_view(),      name="auth-cambiar-compania"),
+    path("auth/cambiar-compania/",    views.CambiarCompaniaView.as_view(),       name="auth-cambiar-compania"),
+    path("auth/cambiar-contrasena/",  views.CambiarContrasenaView.as_view(),    name="auth-cambiar-contrasena"),
     path("auth/mis-companias/",    views.CompaniasSuperusuarioView.as_view(),name="auth-mis-companias"),
     # Roles
     path("roles/",             views.RolList.as_view(),    name="rol-list"),
